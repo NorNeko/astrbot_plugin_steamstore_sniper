@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>🎮 AstrBot Steam 商店速查插件</b><br>
-  通过 AppID 或商店链接快速查询 Steam 游戏信息，支持封面图、简介、多地区价格、分语言区评测与截图查询。
+  通过 AppID 或商店链接快速查询 Steam 游戏信息，支持封面图、简介、多地区价格、分语言区评测。
 </p>
 
 <p align="center">
@@ -97,20 +97,7 @@ https://store.steampowered.com/app/2989760/_/
 ## 输出示例
 
 ```
-🎮 Slay the Spire 2（AppID 2868840）
-
-📋 标志性 Rogue-like 卡牌构筑游戏回归啦！在《杀戮尖塔2》中创建独特的卡组...
-
-🏷️  独立、策略、抢先体验
-🛠️ 开发商：Mega Crit
-🏢 发行商：Mega Crit
-💰 HK$ 149.00（HK）
-😞 多半差评（39% 好评 · 67,997 条 · 简体中文区）
-
-📅 发售日期：2026 年 3 月 6 日
-📦 关联 DLC：2 个
-🔗 https://store.steampowered.com/app/2868840/
-[封面图]
+![alt text](image.png)
 ```
 
 ---
