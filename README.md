@@ -147,3 +147,7 @@ https://store.steampowered.com/app/2989760/_/
 ## 许可
 
 MIT License
+
+## 彩蛋
+
+LOGO图其实是AI生的
