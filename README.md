@@ -97,7 +97,8 @@ https://store.steampowered.com/app/2989760/_/
 ## 输出示例
 
 ```
-![alt text](image.png)
+sample/Snipaste_2026-04-24_02-05-43.png
+
 ```
 
 ---
