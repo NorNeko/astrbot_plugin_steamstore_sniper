@@ -1,6 +1,16 @@
 # astrbot_plugin_steamstore_sniper
 
-**Steam 商店速查** — AstrBot 插件，通过 AppID 或商店链接快速查询 Steam 游戏信息，并在群聊/私聊中自动推送封面图、简介、价格、评测等核心数据。
+<p align="center">
+  <b>🎮 AstrBot Steam 商店速查插件</b><br>
+  通过 AppID 或商店链接快速查询 Steam 游戏信息，支持封面图、简介、多地区价格、分语言区评测与截图查询。
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-v0.1.0-blue?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-yellow?style=flat-square" alt="python">
+  <img src="https://img.shields.io/badge/AstrBot-%3E%3D4.0.0-orange?style=flat-square" alt="astrbot">
+</p>
 
 ---
 
@@ -18,13 +28,47 @@
 
 ---
 
-## 安装
+## 快速开始
 
-1. 将本插件目录放入 AstrBot 的插件文件夹（或通过 Junction 软链接挂载）。
-2. 重启 AstrBot，在 WebUI 插件管理页面启用 **Steam 商店速查**。
-3. 按需在 WebUI 中完成配置（见下文）。
+### 1. 安装
 
-**依赖**：`aiohttp >= 3.9.0`、`Pillow >= 10.0.0`（截图功能），AstrBot 会在插件启动时自动安装。
+**方式一：通过 AstrBot 插件市场安装（推荐）**
+
+在 AstrBot WebUI 中进入 **插件市场**，搜索 `steamstore_sniper`，点击安装，等待完成后重启即可。
+
+**方式二：手动安装**
+
+```bash
+# 进入 AstrBot 插件目录
+cd data/plugins/
+
+# 克隆仓库
+git clone https://github.com/NorNeko/astrbot_plugin_steamstore_sniper.git
+```
+
+完成后在 WebUI 插件管理页面启用 **Steam 商店速查**，重启 AstrBot 生效。
+
+### 2. 依赖
+
+插件启动时会自动安装以下依赖，无需手动操作：
+
+```
+aiohttp>=3.9.0    # 异步 HTTP 客户端
+Pillow>=10.0.0    # 截图功能图像处理（/steam_shots 指令）
+```
+
+### 3. 配置
+
+安装完成后，在 WebUI 插件配置页面按需填写以下项目：
+
+| 配置项 | 必填 | 说明 |
+|---|---|---|
+| **默认地区** (`default_cc`) | 推荐 | 查询价格时的默认地区，如 `hk`、`us`、`cn` |
+| **代理地址** (`proxy`) | 推荐 | 国内用户必须配置，如 `http://127.0.0.1:7890` |
+| 访问控制模式 (`acl_mode`) | 可选 | `Off` / `Whitelist` / `Blacklist`，默认关闭 |
+| URL 自动解析 (`auto_parse_enabled`) | 可选 | 开启后在授权会话中发送链接自动触发查询 |
+
+> 完整配置项说明见文末 [WebUI 配置项](#webui-配置项) 表格。
 
 ---
 
