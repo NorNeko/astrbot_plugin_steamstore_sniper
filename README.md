@@ -97,8 +97,7 @@ https://store.steampowered.com/app/2989760/_/
 ## 输出示例
 
 ```
-sample/Snipaste_2026-04-24_02-05-43.png
-
+![示意图](sample/Snipaste_2026-04-24_02-05-43.png)
 ```
 
 ---
