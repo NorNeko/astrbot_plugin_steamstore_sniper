@@ -95,7 +95,7 @@ class SteamStoreSniperPlugin(Star):
 
     @filter.command("steam")
     async def cmd_steam(self, event: AstrMessageEvent):
-        """查询 Steam 游戏详情。用法：/steam {appid 或商店链接}"""
+        """查询 Steam 游戏详情。用法：/steam {appid}"""
         arg = re.sub(r"^/?steam\s*", "", event.message_str.strip(), flags=re.IGNORECASE).strip()
 
         if not await self._acl.check_access(event.unified_msg_origin):
@@ -105,11 +105,11 @@ class SteamStoreSniperPlugin(Star):
         if not arg or arg.lower() == "help":
             yield event.plain_result(
                 "用法：\n"
-                "  /steam {appid}                        — 通过 AppID 查询游戏详情\n"
-                "  /steam {商店链接}                    — 通过商店链接查询游戏详情\n"
-                "  /steam {appid} {rlang=语言代码}       — 指定本次查询的评测语言区\n"
-                "  /steam_price {appid} {地区代码}     — 指定地区查询价格\n"
-                "  /steam help                         — 显示此帮助\n"
+                "  /steam {appid}                  — 通过 AppID 查询游戏详情\n"
+                "  /steam {appid} {语言代码}       — 指定本次查询的评测语言区\n"
+                "  /steam_price {appid} {地区代码} — 指定地区查询价格\n"
+                "  /steam help                   — 显示此帮助\n"
+                "提示：发送 Steam 商店链接可自动解析（需开启自动解析功能）\n"
                 "评测语言区可选值：schinese、tchinese、japanese、english、all"
             )
             return
@@ -123,10 +123,11 @@ class SteamStoreSniperPlugin(Star):
         else:
             appid_str = arg
 
-        appid = _parse_appid(appid_str)
-        if appid is None:
-            yield event.plain_result("请输入 Steam AppID（纯数字）或商店链接")
+        # 仅接受纯数字 AppID，URL 链接由自动解析处理器负责
+        if not re.match(r"^\d+$", appid_str):
+            yield event.plain_result("请输入 Steam AppID（纯数字）\n如需通过商店链接查询，请直接发送链接（需开启自动解析）")
             return
+        appid = int(appid_str)
 
         cc = self._cc()
         lang = self._lang()
