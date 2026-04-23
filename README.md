@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>🎮 AstrBot Steam 商店速查插件</b><br>
-  通过 AppID 或商店链接快速查询 Steam 游戏信息，支持封面图、简介、多地区价格、分语言区评测。
+  无需登录账号即可通过 AppID 或商店链接快速查询 Steam 游戏信息，支持封面图、简介、多地区价格、分语言区评测。
 </p>
 
 <p align="center">
