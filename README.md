@@ -33,7 +33,6 @@
 | 指令 | 说明 |
 |---|---|
 | `/steam {appid}` | 通过 AppID 查询游戏详情 |
-| `/steam {商店链接}` | 通过 Steam 商店链接查询游戏详情 |
 | `/steam {appid} {语言代码}` | 查询时临时指定本次评测语言区 |
 | `/steam_price {appid} {地区}` | 指定地区查询价格，如 `/steam_price 730 us` |
 | `/steam_rlang {语言代码}` | 切换当前会话的评测统计语言区 |
@@ -43,11 +42,10 @@
 
 **评测语言代码**：`schinese`（简体中文区）/ `tchinese`（繁体中文区）/ `japanese`（日语区）/ `english`（英语区）/ `all`（全部语言）
 
-**商店链接支持格式**：
+**商店链接支持格式示例**：
 ```
 https://store.steampowered.com/app/2868840/Slay_the_Spire_2/
 https://store.steampowered.com/app/2989760/_/
-https://store.steampowered.com/app/3405690/EA_SPORTS_FC_26/
 ```
 
 ---
@@ -110,6 +108,12 @@ https://store.steampowered.com/app/3405690/EA_SPORTS_FC_26/
 - 评测摘要：[Steam Store API `appreviews`](https://store.steampowered.com/appreviews)（公开接口）
 
 ---
+
+## 未来计划
+- 增加可自选输出美化图片+文本排版的纯图片输出的功能，增加美观度和便捷性
+- 实现简单的网页截图功能，作为部分信息无法满足的补充
+- 增加对游戏商店页面相关捆绑包和DLC的显示
+- 增加SteamDB等第三方数据库的查询选项，作为信息补充，获取历史低价等公开接口无法提供的数据。
 
 ## 许可
 
