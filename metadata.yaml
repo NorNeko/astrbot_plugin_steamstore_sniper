@@ -1,6 +1,6 @@
 name: astrbot_plugin_steamstore_sniper
 display_name: Steam 商店速查
-desc: 无须登录账号或cookie即可通过 AppID 或商店链接快捷查询 Steam 游戏信息，支持封面、简介、地区价格
+desc: 无需登录账号即可通过 AppID 或商店链接快速查询 Steam 游戏信息，支持封面图、简介、多地区价格、分语言区评测。
 help: |
   /steam {appid}                查询游戏详情（通过 AppID）
   /steam_price {appid} {地区}   指定地区查询价格，如 /steam_price 730 us
