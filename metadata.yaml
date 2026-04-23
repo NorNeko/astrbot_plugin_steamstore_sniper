@@ -1,0 +1,11 @@
+name: astrbot_plugin_steamstore_sniper
+display_name: Steam 商店速查
+desc: 通过 AppID 或商店链接查询 Steam 游戏信息，支持封面、简介、地区价格
+help: |
+  /steam {appid}                查询游戏详情（通过 AppID）
+  /steam {商店链接}              查询游戏详情（通过商店链接）
+  /steam_price {appid} {地区}   指定地区查询价格，如 /steam_price 730 us
+  /steam help                   显示帮助信息
+version: v0.1.0
+author: B2347
+repo: https://github.com/NorNeko/astrbot_plugin_steamstore_sniper

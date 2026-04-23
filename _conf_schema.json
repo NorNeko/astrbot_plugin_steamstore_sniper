@@ -1,0 +1,93 @@
+{
+    "default_cc": {
+        "description": "默认地区代码",
+        "hint": "查询价格时使用的地区。候选值：hk（香港）/ cn（中国大陆）/ us（美国）/ jp（日本）/ tw（台湾）/ sg（新加坡）",
+        "type": "string",
+        "default": "hk",
+        "options": ["hk", "cn", "us", "jp", "tw", "sg"]
+    },
+    "default_lang": {
+        "description": "默认语言代码",
+        "hint": "游戏信息的显示语言。schinese = 简体中文，english = 英文",
+        "type": "string",
+        "default": "schinese",
+        "options": ["schinese", "english", "japanese", "koreana"]
+    },
+    "review_lang": {
+        "description": "评测数据语言区",
+        "hint": "统计好评率时筛选的评测语言区。schinese=简体中文区，tchinese=繁体中文区，japanese=日语区，english=英语区，all=全部语言。可在对话中用 /steam_rlang {语言代码} 临时切换。",
+        "type": "string",
+        "default": "schinese",
+        "options": ["schinese", "tchinese", "japanese", "english", "all"]
+    },
+    "request_timeout": {
+        "description": "请求超时时间（秒）",
+        "hint": "向 Steam 接口发起请求的最大等待时间，超时后返回失败提示",
+        "type": "int",
+        "slider": {
+            "min": 5,
+            "max": 30,
+            "step": 1
+        },
+        "default": 10
+    },
+    "proxy": {
+        "description": "代理地址",
+        "hint": "例如 http://127.0.0.1:7897，留空则不使用代理。",
+        "type": "string",
+        "default": "http://127.0.0.1:7897"
+    },
+    "max_description_length": {
+        "description": "简介最大字符数",
+        "hint": "short_description 超出此长度时截断并加省略号，设为 0 表示不截断",
+        "type": "int",
+        "slider": {
+            "min": 50,
+            "max": 500,
+            "step": 50
+        },
+        "default": 200
+    },
+    "acl_mode": {
+        "description": "访问控制模式",
+        "hint": "Off=关闭（所有人可用）；Whitelist=白名单（仅 allowed_list 内可用）；Blacklist=黑名单（banned_list 内拒绝访问）",
+        "type": "string",
+        "default": "Off",
+        "options": ["Off", "Whitelist", "Blacklist"]
+    },
+    "allowed_list": {
+        "description": "白名单（UMO 列表）",
+        "hint": "Whitelist 模式下生效。每条填写完整 UMO，如：aiocqhttp:GroupMessage:123456。通过 /sid 获取当前会话 UMO。",
+        "type": "list",
+        "default": []
+    },
+    "banned_list": {
+        "description": "黑名单（UMO 列表）",
+        "hint": "Blacklist 模式下生效。格式同 allowed_list。",
+        "type": "list",
+        "default": []
+    },
+    "auto_parse_enabled": {
+        "description": "启用 URL 自动解析",
+        "hint": "开启后，在通过访问控制（ACL）的会话中发送 Steam 商店链接，机器人将自动解析并回复游戏信息。访问控制规则与 /steam 指令共用同一套 acl_mode/allowed_list 配置。",
+        "type": "bool",
+        "default": false
+    },
+    "block_adult_screenshots": {
+        "description": "屏蔽成人内容截图",
+        "hint": "启用时，/steam_shots 对 required_age >= 18 的游戏拒绝发送截图，适合在未成年人可访问的群组中使用",
+        "type": "bool",
+        "default": true
+    },
+    "max_screenshots": {
+        "description": "最多发送截图数量",
+        "hint": "/steam_shots 每次最多发送的截图张数，范围 1-9",
+        "type": "int",
+        "slider": {
+            "min": 1,
+            "max": 9,
+            "step": 1
+        },
+        "default": 6
+    }
+}
