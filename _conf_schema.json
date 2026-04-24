@@ -81,13 +81,41 @@
     },
     "max_screenshots": {
         "description": "最多发送截图数量",
-        "hint": "/steam_shots 每次最多发送的截图张数，范围 1-9",
+        "hint": "/steam_shots 每次最多发送的截图张数，范围 1-15",
         "type": "int",
         "slider": {
             "min": 1,
-            "max": 9,
+            "max": 15,
             "step": 1
         },
         "default": 6
+    },
+    "screenshot_width": {
+        "description": "截图拼图宽度（px）",
+        "hint": "拼接长图时每张截图等比缩放到的宽度（像素）。数值越大图片越清晰但体积越大。原始缩略图约 600px 宽，建议保持默认值。",
+        "type": "int",
+        "slider": {
+            "min": 400,
+            "max": 1200,
+            "step": 100
+        },
+        "default": 600
+    },
+    "cc_fallback_order": {
+        "description": "地区锁区自动回退顺序",
+        "hint": "查询失败（当前地区不可见）时，自动按此顺序尝试其他地区。格式：地区代码用英文分号分隔，如 hk;jp;us。留空则不回退。\n可用地区代码：hk（香港）/ jp（日本）/ us（美国）/ cn（中国大陆）/ tw（台湾）/ sg（新加坡）/ gb（英国）/ de（德国）/ fr（法国）/ kr（韩国）。\n此设置不影响默认查询地区（default_cc）。",
+        "type": "string",
+        "default": "hk;jp;us"
+    },
+    "screenshot_stitch_max_kb": {
+        "description": "截图长图最大体积（KB）",
+        "hint": "拼接后的截图长图超出此体积时，自动降低 JPEG 压缩质量。设为 0 表示不限制。超大图片将导致 QQ/NapCat 发送超时（retcode 1200），建议保持 800 以内。单位：KB",
+        "type": "int",
+        "slider": {
+            "min": 0,
+            "max": 8192,
+            "step": 256
+        },
+        "default": 800
     }
 }

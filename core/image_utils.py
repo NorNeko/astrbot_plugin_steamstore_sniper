@@ -10,6 +10,7 @@ image_utils.py — 图片压缩工具
 import asyncio
 import io
 
+from astrbot.api import logger
 from PIL import Image as PILImage
 
 
@@ -77,7 +78,8 @@ def _compress_sync(img_data: bytes, target_kb: int = 0, quality: int = 85) -> by
                 candidate = _save(quality)
                 return candidate if len(candidate) < len(img_data) else img_data
 
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[image_utils] 图片压缩失败，返回原始数据：{type(e).__name__}: {e}")
         return img_data
 
 
@@ -96,3 +98,101 @@ async def compress_image(img_data: bytes, target_kb: int = 0, quality: int = 85)
     if not img_data:
         return img_data
     return await asyncio.to_thread(_compress_sync, img_data, target_kb, quality)
+
+
+def _stitch_vertical_sync(
+    images_bytes: list[bytes],
+    target_width: int = 600,
+    gap: int = 8,
+    quality: int = 85,
+    target_kb: int = 0,
+) -> bytes:
+    """
+    将多张图片垂直拼接为单列长图（设计为在 asyncio.to_thread 中执行）。
+
+    Args:
+        images_bytes: 原始图片字节列表，单张解析失败时跳过并记录警告
+        target_width: 每张图等比缩放到的宽度（px）
+        gap:          图间白色分隔条高度（px）
+        quality:      输出 JPEG 质量（1-100）
+
+    Returns:
+        拼接后的 JPEG 字节
+
+    Raises:
+        ValueError: 所有图片均解析失败时抛出
+    """
+    frames: list[PILImage.Image] = []
+    for raw in images_bytes:
+        try:
+            with io.BytesIO(raw) as buf:
+                img = PILImage.open(buf)
+                img.load()  # 在 BytesIO 关闭前加载完整像素数据
+            # 透明通道转白底 RGB
+            if img.mode == "RGBA":
+                bg = PILImage.new("RGB", img.size, (255, 255, 255))
+                bg.paste(img, mask=img.split()[-1])
+                img = bg
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            # 仅向下缩放至 target_width，不将小图放大（放大会无谓增加文件体积）
+            if img.width > target_width:
+                new_h = max(1, round(img.height * target_width / img.width))
+                img = img.resize((target_width, new_h), PILImage.LANCZOS)
+            frames.append(img)
+        except Exception as e:
+            logger.warning(f"[image_utils] 拼图跳过一张（解析失败）：{type(e).__name__}: {e}")
+
+    if not frames:
+        raise ValueError("所有图片均解析失败，无法拼接")
+
+    # 画布宽度以最宽帧为准（旧逐帧居中粘贴）
+    canvas_width = max(f.width for f in frames)
+    total_h = sum(f.height for f in frames) + gap * (len(frames) - 1)
+    canvas = PILImage.new("RGB", (canvas_width, total_h), (255, 255, 255))
+    y = 0
+    for i, frame in enumerate(frames):
+        x_off = (canvas_width - frame.width) // 2  # 窄帧居中
+        canvas.paste(frame, (x_off, y))
+        y += frame.height
+        if i < len(frames) - 1:
+            y += gap  # canvas 底色为白，间隙处无需额外绘制
+
+    out = io.BytesIO()
+    canvas.save(out, format="JPEG", quality=quality, optimize=True, progressive=True)
+    result = out.getvalue()
+
+    # 体积封顶：若超出 target_kb 限制，二分搜索降质量
+    if target_kb > 0:
+        target_bytes = target_kb * 1024
+        if len(result) > target_bytes:
+            def _save(q: int) -> bytes:
+                buf = io.BytesIO()
+                canvas.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
+                return buf.getvalue()
+            low, high, best = 10, quality - 1, None
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = _save(mid)
+                if len(candidate) <= target_bytes:
+                    best = candidate
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            result = best if best else _save(10)
+
+    return result
+
+
+async def stitch_images_vertical(
+    images_bytes: list[bytes],
+    target_width: int = 600,
+    gap: int = 8,
+    quality: int = 85,
+    target_kb: int = 0,
+) -> bytes:
+    """
+    异步垂直拼图入口。PIL 操作在线程池中执行，不阻塞事件循环。
+    失败时向上抛出异常，由调用方处理。
+    """
+    return await asyncio.to_thread(_stitch_vertical_sync, images_bytes, target_width, gap, quality, target_kb)

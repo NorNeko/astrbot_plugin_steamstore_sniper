@@ -1,14 +1,15 @@
+import os
 import re
+import tempfile
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
-from astrbot.core.message.components import Node, Image
 
 from .core.steam_client import SteamClient, SteamAPIError
 from .core.store_service import StoreService
 from .core.security_acl import SecurityACL
-from .core.image_utils import compress_image
+from .core.image_utils import stitch_images_vertical
 from .core import formatter
 
 # 从 Steam 商店链接中提取 AppID（定版规则：开发圣经 §5.2）
@@ -44,7 +45,10 @@ class SteamStoreSniperPlugin(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.config = config
-        timeout = int(config.get("request_timeout", 10))
+        try:
+            timeout = int(config.get("request_timeout", 10))
+        except (TypeError, ValueError):
+            timeout = 10
 
         # 代理：直接读取完整 URL，空字符串则不使用代理（回退至 trust_env 环境变量）
         proxy_raw = str(config.get("proxy", "")).strip()
@@ -81,12 +85,60 @@ class SteamStoreSniperPlugin(Star):
     def _max_desc(self) -> int:
         return int(self.config.get("max_description_length", 200))
 
+    def _screenshot_width(self) -> int:
+        try:
+            return max(400, min(1200, int(self.config.get("screenshot_width", 600))))
+        except (TypeError, ValueError):
+            return 600
+
+    def _stitch_target_kb(self) -> int:
+        try:
+            return max(0, int(self.config.get("screenshot_stitch_max_kb", 800)))
+        except (TypeError, ValueError):
+            return 800
+
+    def _fallback_ccs(self, exclude: str = "") -> list[str]:
+        """解析 cc_fallback_order 配置项，返回去重后的地区代码列表（已排除 exclude）。"""
+        raw = str(self.config.get("cc_fallback_order", "hk;jp;us")).strip()
+        if not raw:
+            return []
+        codes = [c.strip().lower() for c in raw.split(";") if c.strip()]
+        if exclude:
+            codes = [c for c in codes if c != exclude.lower()]
+        return codes
+
+    async def _query_with_fallback(
+        self,
+        appid: int,
+        cc: str,
+        lang: str,
+        review_lang: str = "all",
+    ) -> tuple["SteamGameInfo", str]:
+        """
+        查询游戏信息，若主地区不可见则按 cc_fallback_order 顺序自动重试。
+        返回 (game, effective_cc)，effective_cc 为实际成功的地区代码。
+        """
+        from .models.store_models import SteamGameInfo  # 仅用于类型提示
+        game = await self._service.get_game_info(appid, cc, lang, review_lang=review_lang)
+        if not game.error:
+            return game, cc
+        # 仅对「地区不可见」触发回退，其他错误（超时/AppID不存在）直接返回
+        if "不可见" not in game.error:
+            return game, cc
+        for fallback_cc in self._fallback_ccs(exclude=cc):
+            logger.debug(f"[steam] AppID {appid} 地区 {cc} 不可见，尝试回退至 {fallback_cc}")
+            fallback_game = await self._service.get_game_info(appid, fallback_cc, lang, review_lang=review_lang)
+            if not fallback_game.error:
+                return fallback_game, fallback_cc
+        # 所有回退均失败，返回原始错误
+        return game, cc
+
     def _review_lang(self, session_id: str = "") -> str:
         """Returns the effective review language for the given session.
         Session-level override (set by /steam_rlang) takes priority over WebUI config.
         """
         if session_id and session_id in self._session_review_lang:
-            return self._session_review_lang[session_id]
+            return self._session_review_lang.pop(session_id)
         return str(self.config.get("review_lang", "schinese"))
 
     # ------------------------------------------------------------------
@@ -133,7 +185,7 @@ class SteamStoreSniperPlugin(Star):
         lang = self._lang()
         # 优先级：内联参数 > 会话覆盖 > WebUI 全局默认
         rlang = inline_rlang if inline_rlang else self._review_lang(event.unified_msg_origin)
-        game = await self._service.get_game_info(appid, cc, lang, review_lang=rlang)
+        game, cc = await self._query_with_fallback(appid, cc, lang, review_lang=rlang)
 
         # 截断简介
         if game.short_description:
@@ -198,7 +250,7 @@ class SteamStoreSniperPlugin(Star):
 
         cc = self._cc()
         lang = self._lang()
-        game = await self._service.get_game_info(appid, cc, lang, review_lang=self._review_lang(event.unified_msg_origin))
+        game, cc = await self._query_with_fallback(appid, cc, lang, review_lang=self._review_lang(event.unified_msg_origin))
 
         if game.error:
             logger.debug(f"[steam] 自动解析 AppID {appid} 失败: {game.error}")
@@ -270,7 +322,7 @@ class SteamStoreSniperPlugin(Star):
             yield event.plain_result("请输入 Steam AppID（纯数字）或商店链接")
             return
 
-        game = await self._service.get_game_info(appid, self._cc(), self._lang())
+        game, _cc = await self._query_with_fallback(appid, self._cc(), self._lang())
 
         if game.error:
             yield event.plain_result(f"查询失败：{game.error}")
@@ -295,45 +347,57 @@ class SteamStoreSniperPlugin(Star):
             yield event.plain_result(f"【{game.name}】暂无截图数据")
             return
 
-        max_count = max(1, min(9, int(self.config.get("max_screenshots", 6))))
+        try:
+            max_count = max(1, min(15, int(self.config.get("max_screenshots", 6))))
+        except (TypeError, ValueError):
+            max_count = 6
+        # 先过滤全部有效 URL，再取前 max_count 张（避免先切片后因缺少 URL 导致实际数量不足）
         thumb_urls = [
             s["path_thumbnail"]
-            for s in game.screenshots[:max_count]
+            for s in game.screenshots
             if s.get("path_thumbnail")
-        ]
+        ][:max_count]
         if not thumb_urls:
             yield event.plain_result(f"【{game.name}】无可用截图 URL")
             return
 
-        # 下载并压缩截图
-        # uin 使用机器人自身 QQ 号（官方文档示例：uin=905617992，整数或字符串均可）
-        self_id = event.get_self_id()
-        nodes: list[Node] = []
+        # 下载截图原始字节（拼图前不单张压缩，统一交给 stitch_images_vertical 处理）
+        images_raw: list[bytes] = []
         failed = 0
         for url in thumb_urls:
             try:
                 img_data = await self._client.download_bytes(url)
-                compressed = await compress_image(img_data, quality=85)
-                node = Node(
-                    uin=self_id,
-                    name="Steam 截图",
-                    content=[Image.fromBytes(compressed)],
-                )
-                nodes.append(node)
+                images_raw.append(img_data)
             except SteamAPIError as e:
                 logger.warning(f"[steam] 截图下载失败: {e}")
                 failed += 1
             except Exception as e:
-                logger.warning(f"[steam] 截图处理异常: {type(e).__name__}: {e}")
+                logger.warning(f"[steam] 截图下载异常: {type(e).__name__}: {e}")
                 failed += 1
 
-        if not nodes:
+        if not images_raw:
             yield event.plain_result(
                 f"【{game.name}】所有截图下载失败（共 {failed} 张），请检查网络或代理配置后重试"
             )
             return
 
-        # 合并转发：多个 Node 直接放入列表，通过 yield event.chain_result 发送
-        # 来源：https://docs.astrbot.app/dev/star/guides/send-message.html
-        yield event.chain_result(nodes)
+        # 垂直拼接为长图，以普通图片消息发送（避免合并转发的 QQ 兼容性问题）
+        try:
+            stitched = await stitch_images_vertical(
+                images_raw,
+                target_width=self._screenshot_width(),
+                target_kb=self._stitch_target_kb(),
+                quality=72,
+            )
+        except Exception as e:
+            logger.warning(f"[steam] 截图拼接失败: {type(e).__name__}: {e}")
+            yield event.plain_result(f"【{game.name}】截图拼接失败，请稍后重试")
+            return
+
+        # 写入临时文件发送（避免 base64 大字符串被 NapCat 拒收，与 X 插件保持一致的 file:/// 发送方式）
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(stitched)
+            tmp_path = tmp.name
+        event.track_temporary_local_file(tmp_path)
+        yield event.make_result().file_image(tmp_path)
 

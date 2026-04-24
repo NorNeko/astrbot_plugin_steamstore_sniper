@@ -87,7 +87,7 @@ class StoreService:
                 currency=price_raw.get("currency"),
                 initial_formatted=price_raw.get("initial_formatted"),
                 final_formatted=price_raw.get("final_formatted"),
-                discount_percent=int(price_raw.get("discount_percent", 0)),
+                discount_percent=int(price_raw.get("discount_percent") or 0),
             )
 
         # release_date
