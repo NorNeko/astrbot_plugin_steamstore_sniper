@@ -6,6 +6,6 @@ help: |
   /steam_price {appid} {地区}   指定地区查询价格，如 /steam_price 730 us
   /steam help                   显示帮助信息
   发送 Steam 商店链接可自动解析（需开启自动解析功能）
-version: v0.1.0
+version: v0.2.0
 author: B2347
 repo: https://github.com/NorNeko/astrbot_plugin_steamstore_sniper
