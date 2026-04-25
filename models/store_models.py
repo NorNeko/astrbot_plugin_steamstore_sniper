@@ -59,5 +59,18 @@ class SteamGameInfo:
     review_total_reviews: int = 0             # 总评测数
     review_lang: str = "all"                  # 评测统计的语言区筛选（schinese/tchinese/japanese/english/all）
 
+    # --- 在线人数（来自 ISteamUserStats/GetNumberOfCurrentPlayers） ---
+    current_players: Optional[int] = None     # 当前在线玩家数；None 表示获取失败或未请求
+
+    # --- ITAD 数据（来自 IsThereAnyDeal API，需配置 itad_api_key） ---
+    itad_tags: list[str] = field(default_factory=list)       # 用户社区标签（如 roguelike、动作）
+    history_low_price: Optional[float] = None                # Steam 平台历史最低价格（金额数字）
+    history_low_currency: Optional[str] = None               # Steam 平台历史最低价的货币代码（如 HKD）
+    history_low_cut: Optional[int] = None                    # Steam 平台历史最高折扣（百分比，如 75 代表 -75%）
+    history_low_date: Optional[str] = None                   # Steam 平台历史最低价日期（YYYY-MM-DD）
+    history_low_shop: Optional[str] = None                   # 历史最低价来源商店（应为 Steam）
+    has_trading_cards: Optional[bool] = None                 # 是否有 Steam 集换卡牌（来自 ITAD info/v2）
+    subscription_services: list[str] = field(default_factory=list)  # 当前可订阅服务列表（如 Game Pass、EA Play）
+
     # --- 内部状态（非接口字段） ---
     error: Optional[str] = None         # 请求或解析失败时填充，非 None 表示查询失败

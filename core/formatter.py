@@ -58,8 +58,15 @@ def format_game_info(game: SteamGameInfo, cc: str) -> tuple[str, str | None]:
     lines.append("")
 
     # ── 标签 / 开发商 / 发行商 ───────────────────────────────────────────
-    # 优先显示开发商指定的游戏类型（genres，图3），绝不使用功能性分类（categories，图2）
-    if game.genres:
+    # 标签优先级：ITAD 用户社区标签 > Steam genres（开发商指定类型）
+    if game.itad_tags:
+        tags = game.itad_tags[:8]
+        extra = len(game.itad_tags) - 8
+        tag_str = "、".join(tags)
+        if extra > 0:
+            tag_str += f"（等{extra}个）"
+        lines.append(f"🏷️  {tag_str}")
+    elif game.genres:
         lines.append(f"🏷️  {'、'.join(game.genres)}")
     if game.developers:
         lines.append(f"🛠️ 开发商：{'、'.join(game.developers)}")
@@ -68,6 +75,14 @@ def format_game_info(game: SteamGameInfo, cc: str) -> tuple[str, str | None]:
 
     # ── 价格 ─────────────────────────────────────────────────────────────
     lines.append(f"💰 {format_price_only(game, cc)}")
+
+    # ── Steam 历史最低价（ITAD storelow，有数据时展示）──────────────────
+    if game.history_low_price is not None:
+        lines.append(_format_history_low(game))
+
+    # ── 订阅服务（有数据时展示）─────────────────────────────────────────
+    if game.subscription_services:
+        lines.append(f"🎫 可订阅：{'、'.join(game.subscription_services)}")
 
     # ── 评测 ─────────────────────────────────────────────────────────────
     if game.review_score_desc:
@@ -83,6 +98,10 @@ def format_game_info(game: SteamGameInfo, cc: str) -> tuple[str, str | None]:
         else:
             lines.append(f"{score_emoji} {game.review_score_desc}（{lang_label}）")
 
+    # ── 当前在线人数 ──────────────────────────────────────────────────────
+    if game.current_players is not None:
+        lines.append(f"👥 当前在线：{game.current_players:,} 人")
+
     # ── 发售 / DLC ───────────────────────────────────────────────────────
     lines.append("")
     if game.coming_soon:
@@ -91,6 +110,8 @@ def format_game_info(game: SteamGameInfo, cc: str) -> tuple[str, str | None]:
         lines.append(f"📅 发售日期：{game.release_date_str}")
     if game.dlc_count > 0:
         lines.append(f"📦 关联 DLC：{game.dlc_count} 个")
+    if game.has_trading_cards:
+        lines.append("🃏 含 Steam 集换卡牌")
 
     # ── 商店链接 ─────────────────────────────────────────────────────────
     if game.steam_appid:
@@ -114,3 +135,25 @@ def format_price_only(game: SteamGameInfo, cc: str) -> str:
             )
         return f"{p.final_formatted}（{cc.upper()}）"
     return f"该地区价格暂不可见（{cc.upper()}）"
+
+
+def _format_history_low(game: SteamGameInfo) -> str:
+    """
+    格式化历史最低价行，仅供 format_game_info 内部调用。
+    示例：💸 史低 HKD 9.75（-75% · 2024-06-28 · Steam）
+    """
+    currency = game.history_low_currency or ""
+    price_str = f"{game.history_low_price:.2f}"
+    price_part = f"{currency} {price_str}".strip()
+
+    details: list[str] = []
+    if game.history_low_cut:
+        details.append(f"-{game.history_low_cut}%")
+    if game.history_low_date:
+        details.append(game.history_low_date)
+    if game.history_low_shop:
+        details.append(game.history_low_shop)
+
+    if details:
+        return f"💸 史低 {price_part}（{'  ·  '.join(details)}）"
+    return f"💸 史低 {price_part}"

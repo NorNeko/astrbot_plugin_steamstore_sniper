@@ -9,6 +9,7 @@ image_utils.py — 图片压缩工具
 
 import asyncio
 import io
+import random
 
 from astrbot.api import logger
 from PIL import Image as PILImage
@@ -148,7 +149,10 @@ def _stitch_vertical_sync(
 
     # 画布宽度以最宽帧为准（旧逐帧居中粘贴）
     canvas_width = max(f.width for f in frames)
-    total_h = sum(f.height for f in frames) + gap * (len(frames) - 1)
+    # 哈希抖动：在画布底部追加 1~4 像素的白色留白，让相同输入每次产出不同的
+    # JPEG 字节流，从而绕过 QQ 服务端基于精确哈希的图片黑名单（视觉上不可感知）。
+    extra_bottom = random.randint(1, 4)
+    total_h = sum(f.height for f in frames) + gap * (len(frames) - 1) + extra_bottom
     canvas = PILImage.new("RGB", (canvas_width, total_h), (255, 255, 255))
     y = 0
     for i, frame in enumerate(frames):

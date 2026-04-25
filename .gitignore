@@ -21,3 +21,7 @@ config.yaml
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 开发文档（本地参考资料，不同步到云端）
+steam游戏界面开发圣经_v1.0.md
+报错日志.md

@@ -1,9 +1,13 @@
 import asyncio
+import time
+from collections import deque
+
 import aiohttp
 from astrbot.api import logger
 
 APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 APPREVIEWS_URL = "https://store.steampowered.com/appreviews"
+PLAYERS_URL = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
 
 
 class SteamAPIError(Exception):
@@ -18,14 +22,37 @@ class SteamClient:
     session 生命周期由插件 initialize / terminate 管理。
     """
 
-    def __init__(self, timeout: int = 10, proxy: str | None = None):
+    def __init__(self, timeout: int = 10, proxy: str | None = None, rate_limit: int = 4):
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: aiohttp.ClientSession | None = None
         # 显式代理 URL（如 http://127.0.0.1:7897）；None 则依赖环境变量（trust_env）
         self._proxy: str | None = proxy
+        # 全局频率限制：每分钟最多 rate_limit 次完整商店页面查询；0 = 不限制
+        self._rate_limit: int = rate_limit
+        self._query_times: deque[float] = deque()
+        self._rate_lock = asyncio.Lock()
+
+    async def check_query_rate_limit(self) -> None:
+        """
+        全局查询频率检查（滑动窗口，窗口 = 60 秒）。
+        以"完整商店页面查询次数"为单位（非底层 HTTP 请求次数），全局对所有会话生效。
+        超限时抛出 SteamAPIError，不发起实际 HTTP 请求，避免触发 Steam 临时封禁。
+        rate_limit == 0 时完全跳过检查。
+        """
+        if self._rate_limit <= 0:
+            return
+        async with self._rate_lock:
+            now = time.monotonic()
+            # 移除 60 秒窗口外的旧时间戳
+            while self._query_times and now - self._query_times[0] > 60.0:
+                self._query_times.popleft()
+            if len(self._query_times) >= self._rate_limit:
+                raise SteamAPIError(
+                    f"查询过于频繁，已达每分钟上限（{self._rate_limit} 次），请稍后再试"
+                )
+            self._query_times.append(now)
 
     async def create_session(self) -> None:
-        if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 timeout=self._timeout,
                 trust_env=True,  # 允许读取 HTTPS_PROXY 等环境变量，作为显式代理未配置时的回退
@@ -112,3 +139,31 @@ class SteamClient:
             raise SteamAPIError("评测接口返回失败")
 
         return raw.get("query_summary") or {}
+
+    async def fetch_current_players(self, appid: int) -> int:
+        """
+        查询指定 AppID 的当前在线玩家数（Steam 上已连接的玩家）。
+        来源：ISteamUserStats/GetNumberOfCurrentPlayers，公开接口，无需 API Key。
+        失败时抛出 SteamAPIError（调用方应捕获，不影响主流程）。
+        """
+        if self._session is None or self._session.closed:
+            raise SteamAPIError("HTTP session 未初始化")
+
+        params = {"appid": appid}
+        logger.debug(f"[steam_client] 请求在线人数 appid={appid}")
+
+        try:
+            async with self._session.get(PLAYERS_URL, params=params, proxy=self._proxy) as resp:
+                if resp.status != 200:
+                    raise SteamAPIError(f"HTTP {resp.status}")
+                raw: dict = await resp.json(content_type=None)
+        except asyncio.TimeoutError:
+            raise SteamAPIError("请求超时")
+        except aiohttp.ClientError as e:
+            raise SteamAPIError(f"网络错误：{e}")
+
+        response = raw.get("response") or {}
+        if response.get("result") != 1:
+            raise SteamAPIError("在线人数接口返回失败")
+
+        return int(response.get("player_count") or 0)

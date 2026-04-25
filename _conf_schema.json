@@ -31,11 +31,28 @@
         },
         "default": 10
     },
+    "rate_limit_per_minute": {
+        "description": "全局查询频率上限（次/分钟）",
+        "hint": "每分钟最多允许查询 Steam 商店页面的次数（全局计数，对所有群聊和对话生效）。超限后返回提示而不发起请求，避免触发 Steam 临时封禁。设为 0 表示不限制。",
+        "type": "int",
+        "slider": {
+            "min": 1,
+            "max": 10,
+            "step": 1
+        },
+        "default": 4
+    },
     "proxy": {
         "description": "代理地址",
         "hint": "例如 http://127.0.0.1:7897，留空则不使用代理。",
         "type": "string",
         "default": "http://127.0.0.1:7897"
+    },
+    "itad_api_key": {
+        "description": "IsThereAnyDeal API Key",
+        "hint": "用于查询用户社区标签、历史最低价格和历史最高折扣。在 https://isthereanydeal.com/apps/my/ 免费申请注册应用后获取。留空则禁用 ITAD 功能（标签回退显示 Steam genres）。",
+        "type": "string",
+        "default": ""
     },
     "max_description_length": {
         "description": "简介最大字符数",
@@ -73,11 +90,11 @@
         "type": "bool",
         "default": false
     },
-    "block_adult_screenshots": {
-        "description": "屏蔽成人内容截图",
-        "hint": "启用时，/steam_shots 对 required_age >= 18 的游戏拒绝发送截图，适合在未成年人可访问的群组中使用",
-        "type": "bool",
-        "default": true
+    "adult_screenshots_block_list": {
+        "description": "成人内容截图屏蔽名单（UMO 列表）",
+        "hint": "默认情况下，/steam_shots 对所有会话不屏蔽 R18 截图。仅当会话 UMO 在此名单中，且游戏 required_age >= 18 或 content_descriptors.ids 含 1/3/4 时，才拒绝发送截图，适合在未成年人可访问的群组中主动添加。每条填写完整 UMO，如：aiocqhttp:GroupMessage:123456。可在对话中用 /steam_adult on|off|status 由管理员动态切换当前会话，命令会持久化写回此列表。通过 /sid 获取当前会话 UMO。",
+        "type": "list",
+        "default": []
     },
     "max_screenshots": {
         "description": "最多发送截图数量",
@@ -109,13 +126,13 @@
     },
     "screenshot_stitch_max_kb": {
         "description": "截图长图最大体积（KB）",
-        "hint": "拼接后的截图长图超出此体积时，自动降低 JPEG 压缩质量。设为 0 表示不限制。超大图片将导致 QQ/NapCat 发送超时（retcode 1200），建议保持 800 以内。单位：KB",
+        "hint": "拼接后的截图长图超出此体积时，自动降低 JPEG 压缩质量。设为 0 表示不限制。当前 aiocqhttp/NapCat 主路径走 OneBot 本地 file:/// 直发，不再依赖 AstrBot Image 的 base64 通道；该值主要用于控制长图上传体积、处理时延与发送稳定性。数值越小越稳但画质越低；若在 QQ 平台频繁触发发送超时或风控，建议优先保持在 200 左右。单位：KB",
         "type": "int",
         "slider": {
             "min": 0,
             "max": 8192,
             "step": 256
         },
-        "default": 800
+        "default": 200
     }
 }
