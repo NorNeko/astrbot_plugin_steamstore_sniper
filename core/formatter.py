@@ -157,3 +157,25 @@ def _format_history_low(game: SteamGameInfo) -> str:
     if details:
         return f"💸 史低 {price_part}（{'  ·  '.join(details)}）"
     return f"💸 史低 {price_part}"
+
+
+def format_search_results_text(results: list[dict], keyword: str) -> str:
+    """
+    纯文本格式的搜索结果（图片发送失败时的回退）。
+    results: [{"name": str, "appid": int, "price": str}, ...]
+    """
+    if not results:
+        return f"🔍 搜索「{keyword}」未找到相关游戏"
+
+    lines: list[str] = []
+    lines.append(f"🔍 搜索「{keyword}」找到 {len(results)} 个相关结果：\n")
+    for i, item in enumerate(results):
+        name = item.get("name", "未知游戏")
+        appid = item.get("appid", "")
+        price = item.get("price", "")
+        line = f"  {i + 1}. {name}（AppID {appid}）"
+        if price:
+            line += f"\n     💰 {price}"
+        lines.append(line)
+
+    return "\n".join(lines)

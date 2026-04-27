@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import aiohttp
 from astrbot.api import logger
@@ -162,6 +163,69 @@ class ITADClient:
             return None
         lows = (data[0] or {}).get("lows") or []
         return lows[0] if lows else None
+
+    async def search_games(self, title: str, limit: int = 5) -> list[dict]:
+        """
+        ITAD /games/search/v1 — 按标题搜索游戏。
+        返回 [{"id": str, "title": str, "appid": int|None, "image_url": str}, ...]
+        失败或无数据时返回空列表。
+        需要有效的 itad_api_key。
+        """
+        if not self._session or self._session.closed:
+            return []
+        if not self._api_key:
+            return []
+
+        url = f"{ITAD_BASE}/games/search/v1"
+        params = {"key": self._api_key, "title": title, "limit": limit}
+        logger.debug(f"[itad] 搜索游戏 title={title!r} limit={limit}")
+
+        try:
+            async with self._session.get(url, params=params, proxy=self._proxy) as resp:
+                if resp.status != 200:
+                    logger.info(f"[itad] 搜索 title={title!r} HTTP {resp.status}")
+                    return []
+                data = await resp.json(content_type=None)
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            logger.info(f"[itad] 搜索 title={title!r} 失败: {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"[itad] 搜索 title={title!r} 异常: {e}")
+            return []
+
+        if not isinstance(data, list):
+            return []
+
+        results: list[dict] = []
+        for game in data:
+            if not isinstance(game, dict):
+                continue
+            # 提取封面图 URL（优先 banner145 > boxart > banner300）
+            assets = game.get("assets") or {}
+            image_url = (
+                assets.get("banner145")
+                or assets.get("boxart")
+                or assets.get("banner300")
+                or ""
+            )
+            # 提取 Steam AppID（从 urls 中匹配 store.steampowered.com/app/{appid}）
+            appid = None
+            for url_item in (game.get("urls") or []):
+                if isinstance(url_item, str) and "store.steampowered.com/app" in url_item:
+                    m = re.search(r"/app/(\d+)", url_item)
+                    if m:
+                        appid = int(m.group(1))
+                        break
+
+            results.append({
+                "id": game.get("id", ""),
+                "title": game.get("title", "未知游戏"),
+                "appid": appid,
+                "image_url": image_url,
+            })
+
+        logger.debug(f"[itad] 搜索 title={title!r} 返回 {len(results)} 条结果")
+        return results
 
     async def fetch_subscriptions(self, itad_id: str, country: str = "US") -> list[str]:
         """

@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.2.0-blue?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v0.3.5-blue?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license">
   <img src="https://img.shields.io/badge/Python-3.10%2B-yellow?style=flat-square" alt="python">
   <img src="https://img.shields.io/badge/AstrBot-%3E%3D4.0.0-orange?style=flat-square" alt="astrbot">
@@ -27,6 +27,8 @@
 | 评测语言区筛选 | 支持按简中 / 繁中 / 日语 / 英语 / 全部 分区统计好评率 |
 | 临时评测语言区切换 | `/steam_rlang` 为下一次查询设置评测统计语言，`/steam {appid} {语言代码}` 也可内联指定 |
 | URL 自动解析 | 白名单会话中发送 Steam 商店链接即自动触发查询，无需输入指令 |
+| 游戏搜索 | `/steam_search {关键词}` 搜索 Steam 游戏，支持中英文，精准匹配时直接输出完整游戏信息 |
+| 增强搜索（可选） | 开启 `enhanced_search` 后，Steam 搜索匹配度低时自动调用 ITAD 补充搜索，并通过 LLM 支持中文关键词翻译和结果校验。**注意：开启后每次搜索会消耗 AstrBot 主模型的 tokens** |
 | 游戏截图查询 | `/steam_shots` 发送压缩拼接长图，默认全局屏蔽 R18，可由管理员通过 `/steam_adult on/off` 按会话切换豁免，QQ 平台触发风控时回退文本提示 |
 | 访问控制（ACL） | 支持白名单 / 黑名单 / 关闭三种模式，按 UMO 精确控制使用权限 |
 
@@ -101,6 +103,7 @@ Pillow>=10.0.0    # 截图功能图像处理（/steam_shots 指令）
 | `/steam {appid} {语言代码}` | 查询时临时指定本次评测语言区 |
 | `/steam` 或 `/steam help` | 显示快速帮助（支持的命令和用法） |
 | `/steam_price {appid 或商店链接} {地区}` | 指定地区查询价格，如 `/steam_price 730 us` |
+| `/steam_search {关键词}` | 搜索 Steam 游戏（支持中英文关键词） |
 | `/steam_shots {appid 或商店链接}` | 查询游戏截图长图（最多 N 张，WebUI 可配置） |
 | 直接发送 Steam 商店链接 | 开启 `auto_parse_enabled` 且通过 ACL 时自动解析 |
 
@@ -147,6 +150,8 @@ https://store.steampowered.com/app/2989760/_/
 | `rate_limit_per_minute` | 整数 | `4` | 全局查询频率上限（次/分钟），0 = 不限制 |
 | `proxy` | 字符串 | `http://127.0.0.1:7897` | 代理地址，留空禁用 |
 | `itad_api_key` | 字符串 | — | IsThereAnyDeal API Key，留空禁用 ITAD 增强功能 |
+| `enhanced_search` | 布尔 | `false` | 启用增强搜索（ITAD）。开启后，当 Steam 官方搜索结果匹配度较低时，自动调用 ITAD 搜索接口进行补充搜索，并调用 AstrBot LLM 支持中文关键词搜索和结果校验。需要配置 `itad_api_key` 才能生效。**注意：开启后每次搜索会消耗 AstrBot 主模型的 tokens（每次搜索约 2-3 次 LLM 调用）** |
+| `search_max_results` | 整数 | `5` | `/steam_search` 每次最多显示的搜索结果条数（1–10） |
 | `max_description_length` | 整数 | `200` | 简介最大字符数，0 = 不截断 |
 | `acl_mode` | 字符串 | `Off` | 访问控制模式：`Off` / `Whitelist` / `Blacklist` |
 | `allowed_list` | 列表 | — | Whitelist 模式下允许使用的 UMO 列表 |
@@ -196,7 +201,6 @@ https://store.steampowered.com/app/2989760/_/
 - 增加SteamDB等第三方数据库的查询选项，作为信息补充，获取历史低价等公开接口无法提供的数据。
 - 群愿望单
 - 日志中若无法获取到页面信息启动地区遍历功能时，不应只返回一个“AppID xxx cc=cn 查询失败: AppID xxx 不存在或在当前地区不可见”，只要启用遍历功能并成功获取到信息时，都应该在日志中添加明确反馈。若均失败也应有对应的日志信息。
-- 游戏搜索，简单的关键词搜索功能，输入 `/steam_search {关键词}` 返回前 N 个相关游戏的 AppID 和名称，方便用户查询不确定的游戏信息。
 
 ## 许可
 

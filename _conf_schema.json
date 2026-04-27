@@ -54,6 +54,12 @@
         "type": "string",
         "default": ""
     },
+    "enhanced_search": {
+        "description": "启用增强搜索（ITAD）",
+        "hint": "开启后，当 Steam 官方搜索结果匹配度较低时，自动调用 ITAD 搜索接口进行补充搜索。需要配置上方的 itad_api_key 才能生效。开启后还会调用 AstrBot LLM 支持中文关键词搜索（需 AstrBot 已配置 LLM Provider）。",
+        "type": "bool",
+        "default": false
+    },
     "max_description_length": {
         "description": "简介最大字符数",
         "hint": "short_description 超出此长度时截断并加省略号，设为 0 表示不截断",
@@ -134,5 +140,16 @@
             "step": 256
         },
         "default": 200
+    },
+    "search_max_results": {
+        "description": "搜索结果最大显示数量",
+        "hint": "/steam_search 每次最多显示的搜索结果条数，范围 1-10",
+        "type": "int",
+        "slider": {
+            "min": 1,
+            "max": 10,
+            "step": 1
+        },
+        "default": 5
     }
 }

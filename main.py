@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json as _json
 from pathlib import Path
 import re
 import tempfile
@@ -645,4 +646,371 @@ class SteamStoreSniperPlugin(Star):
 
         # 非 aiocqhttp 平台保留原有通用方案：拼成长图后由 AstrBot 常规图片通道发送。
         yield event.make_result().base64_image(base64.b64encode(stitched).decode())
+
+    # ------------------------------------------------------------------
+    # 搜索辅助方法
+    # ------------------------------------------------------------------
+
+    def _enhanced_search_enabled(self) -> bool:
+        """检查增强搜索是否启用（enhanced_search=true 且 itad_api_key 非空）。"""
+        if not self.config.get("enhanced_search", False):
+            return False
+        itad_key = str(self.config.get("itad_api_key", "")).strip()
+        return bool(itad_key) and self._itad_client is not None
+
+    def _search_max_results(self) -> int:
+        try:
+            return max(1, min(10, int(self.config.get("search_max_results", 5))))
+        except (TypeError, ValueError):
+            return 5
+
+    async def _llm_validate_search(
+        self, keyword: str, results: list[dict]
+    ) -> dict:
+        """
+        调用 LLM 评估搜索结果与用户意图的匹配度。
+        返回 {"match_level": "high"|"low", "matched_indices": [int], "is_single_precise": bool}
+        LLM 不可用或解析失败时返回默认高匹配（不阻断流程）。
+        """
+        default_result = {
+            "match_level": "high",
+            "matched_indices": list(range(len(results))),
+            "is_single_precise": len(results) == 1,
+        }
+
+        try:
+            provider = self.context.get_using_provider()
+        except Exception:
+            logger.debug("[steam] LLM Provider 不可用，跳过搜索校验")
+            return default_result
+
+        # 构建结果列表文本
+        items_text = "\n".join(
+            f"  {i}. {r.get('name', '未知')} (AppID {r.get('appid', '?')}) — {r.get('price', '未知')}"
+            for i, r in enumerate(results)
+        )
+
+        prompt = (
+            f"你是一个 Steam 游戏搜索结果评估器。你的唯一任务是评估下方列表中的结果与用户搜索意图的匹配度。\n"
+            f"你绝对不能自行搜索、联想、推荐或补充任何不在列表中的游戏。\n\n"
+            f"用户搜索了「{keyword}」。\n\n"
+            f"以下是 Steam 商店搜索返回的结果列表（仅限这些结果，不要引入其他游戏）：\n{items_text}\n\n"
+            f"评估规则：\n"
+            f"1. 仅评估列表中已有的结果，不要自行补充或推荐任何不在列表中的游戏。\n"
+            f"2. 如果用户搜索的是一个游戏系列的通用名（如\"Dark Souls\"、\"Hollow Knight\"），"
+            f"该系列的所有续作/衍生作都应视为高匹配度。\n"
+            f"3. 如果用户搜索中包含了明确的编号或副标题（如\"Dark Souls 3\"、\"Hollow Knight Silksong\"），"
+            f"则只有对应的那一作是高匹配度。\n"
+            f"4. DLC、原声带、粉丝扩展等衍生内容应视为低匹配度，除非用户明确搜索了它们。\n"
+            f"5. 列表中的游戏名与用户搜索意图完全不相关时为低匹配度。\n\n"
+            f"返回 JSON（只返回 JSON，不要返回其他内容）：\n"
+            f'{{"match_level": "high" 或 "low", "matched_indices": [匹配的结果序号，从0开始], '
+            f'"is_single_precise": true 或 false, "reason": "简短说明"}}'
+        )
+
+        try:
+            response = await asyncio.wait_for(
+                provider.text_chat(
+                    prompt=prompt,
+                    contexts=[],
+                    image_urls=[],
+                    func_tool=None,
+                    system_prompt=(
+                        "你是一个 Steam 游戏搜索结果评估器。你的唯一职责是评估给定列表中游戏与用户搜索意图的匹配度。"
+                        "严禁自行搜索、联想、推荐或补充任何不在列表中的游戏。只返回 JSON 格式的结果。"
+                    ),
+                ),
+                timeout=15.0,
+            )
+            text = response.completion_text.strip()
+            # 尝试提取 JSON（可能被 markdown 代码块包裹）
+            json_match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
+            if json_match:
+                parsed = _json.loads(json_match.group())
+                match_level = parsed.get("match_level", "high")
+                matched_indices = parsed.get("matched_indices", [])
+                is_single_precise = parsed.get("is_single_precise", False)
+                # 校验 matched_indices 范围
+                matched_indices = [i for i in matched_indices if 0 <= i < len(results)]
+                if not matched_indices:
+                    matched_indices = list(range(len(results)))
+                logger.info(
+                    f"[steam] LLM 搜索校验: level={match_level} "
+                    f"indices={matched_indices} single={is_single_precise} "
+                    f"reason={parsed.get('reason', '')}"
+                )
+                return {
+                    "match_level": match_level,
+                    "matched_indices": matched_indices,
+                    "is_single_precise": bool(is_single_precise),
+                }
+        except asyncio.TimeoutError:
+            logger.warning("[steam] LLM 搜索校验超时（15s），回退为默认。请检查 LLM Provider 网络连接或代理配置")
+        except Exception as e:
+            logger.warning(f"[steam] LLM 搜索校验失败（回退为默认）: {type(e).__name__}: {e}。请检查 LLM Provider 配置")
+
+        return default_result
+
+    async def _translate_to_english(self, chinese_text: str) -> str:
+        """调用 LLM 将中文翻译为 Steam 英文游戏名。失败时返回原文。"""
+        try:
+            provider = self.context.get_using_provider()
+            response = await asyncio.wait_for(
+                provider.text_chat(
+                    prompt=(
+                        f"请将以下游戏名翻译为 Steam 商店页面上的英文官方名称。\n"
+                        f"规则：仅输出英文名，不要输出其他任何内容。如果该游戏不在 Steam 平台上，"
+                        f"请原样输出输入的游戏名，不要编造或联想其他游戏。\n"
+                        f"游戏名：{chinese_text}"
+                    ),
+                    contexts=[],
+                    image_urls=[],
+                    func_tool=None,
+                    system_prompt="你是一个游戏名称翻译器。仅将中文游戏名翻译为 Steam 商店的英文官方名称。不要编造、联想或推荐任何游戏。仅输出英文名。",
+                ),
+                timeout=15.0,
+            )
+            translated = response.completion_text.strip()
+            if translated:
+                logger.info(f"[steam] LLM 翻译: {chinese_text!r} -> {translated!r}")
+                return translated
+        except asyncio.TimeoutError:
+            logger.warning("[steam] LLM 翻译超时（15s），使用原始关键词。请检查 LLM Provider 网络连接或代理配置")
+        except Exception as e:
+            logger.warning(f"[steam] LLM 翻译失败: {type(e).__name__}: {e}。请检查 LLM Provider 配置")
+        return chinese_text
+
+    async def _download_image_bytes(self, url: str) -> bytes | None:
+        """下载图片字节，失败时返回 None。"""
+        if not url:
+            return None
+        try:
+            return await self._client.download_bytes(url)
+        except Exception as e:
+            logger.debug(f"[steam] 搜索封面图下载失败: {type(e).__name__}: {e}")
+            return None
+
+    async def _send_search_results(
+        self,
+        event: AstrMessageEvent,
+        results: list[dict],
+        keyword: str,
+    ):
+        """
+        逐条发送搜索结果：封面缩略图 + 文字描述。
+        每条结果作为一个独立消息发送（图片+文字），实现"文字夹带封面缩略图"效果。
+        图片发送失败时跳过该条图片，仅发送文字。
+        """
+        # 先发送标题行
+        yield event.plain_result(
+            f"🔍 搜索「{keyword}」找到 {len(results)} 个相关结果："
+        )
+
+        # 逐条发送结果
+        for i, item in enumerate(results):
+            name = item.get("name", "未知游戏")
+            appid = item.get("appid", "")
+            price = item.get("price", "")
+            image_url = item.get("image_url", "")
+
+            # 构建文字描述
+            text = f"  {i + 1}. {name}（AppID {appid}）"
+            if price:
+                text += f"\n     💰 {price}"
+
+            # 尝试附带封面缩略图发送
+            if image_url:
+                result = event.make_result().url_image(image_url).message(text)
+                yield result
+            else:
+                yield event.plain_result(text)
+
+    # ------------------------------------------------------------------
+    # 指令：/steam_search（游戏搜索）
+    # ------------------------------------------------------------------
+
+    @filter.command("steam_search")
+    async def cmd_steam_search(self, event: AstrMessageEvent):
+        """搜索 Steam 游戏。用法：/steam_search {关键词}"""
+        if not await self._acl.check_access(event.unified_msg_origin):
+            yield event.plain_result("权限不足：您所在的群组或账户未被授权使用此功能。")
+            return
+
+        arg = re.sub(
+            r"^/?steam_search\s*", "", event.message_str.strip(), flags=re.IGNORECASE
+        ).strip()
+        if not arg:
+            yield event.plain_result(
+                "用法：/steam_search {关键词}\n"
+                "支持中英文关键词，如 /steam_search Dark Souls 或 /steam_search 怪物猎人"
+            )
+            return
+
+        keyword = arg[:100]  # 截断超长关键词
+        max_results = self._search_max_results()
+        enhanced = self._enhanced_search_enabled()
+
+        # ── 方案 B：Steam /search/suggest ──
+        results: list[dict] = []
+        try:
+            results = await self._client.search_suggest(keyword, self._cc(), self._lang())
+        except SteamAPIError as e:
+            logger.warning(f"[steam] 搜索 suggest 失败: {e}")
+
+        # 限制结果数量（不再回退 /search/results/，因其会返回无关推荐游戏）
+        results = results[:max_results]
+
+        # ── 增强搜索关闭：纯 Steam 搜索，无 LLM、无 ITAD ──
+        if not enhanced:
+            if results:
+                async for r in self._send_search_results(event, results, keyword):
+                    yield r
+            else:
+                yield event.plain_result(f"🔍 搜索「{keyword}」未找到相关游戏")
+            return
+
+        # ── 以下为增强搜索流程（需要 LLM + ITAD）──
+
+        # ── LLM 校验 #1 ──
+        if results:
+            validation = await self._llm_validate_search(keyword, results)
+            match_level = validation["match_level"]
+            matched_indices = validation["matched_indices"]
+            is_single_precise = validation["is_single_precise"]
+
+            if match_level == "high" and is_single_precise and len(matched_indices) == 1:
+                # 精准匹配 → 直出完整游戏信息
+                precise_appid = results[matched_indices[0]]["appid"]
+                logger.info(f"[steam] 搜索精准匹配 AppID {precise_appid}，直出完整信息")
+                game, cc = await self._query_with_fallback(
+                    precise_appid, self._cc(), self._lang(),
+                    review_lang=self._review_lang(event.unified_msg_origin),
+                )
+                if not game.error:
+                    if game.short_description:
+                        max_len = self._max_desc()
+                        if len(game.short_description) > max_len:
+                            game.short_description = game.short_description[:max_len] + "..."
+                    text, image_url = formatter.format_game_info(game, cc)
+                    result = event.make_result().message(text)
+                    if image_url:
+                        result = result.url_image(image_url)
+                    yield result
+                    return
+                # appdetails 查询失败，回退到搜索卡片
+                logger.warning(f"[steam] 精准匹配 AppID {precise_appid} 查询失败，回退搜索卡片")
+
+            if match_level == "high":
+                # 多条匹配（系列续作等）→ 输出搜索卡片
+                filtered = [results[i] for i in matched_indices if i < len(results)]
+                if filtered:
+                    async for r in self._send_search_results(event, filtered, keyword):
+                        yield r
+                    return
+
+            # LLM 判定匹配度低 → 进入 ITAD 增强搜索
+        else:
+            # Steam 无结果 → 进入 ITAD 增强搜索
+            pass
+
+        # 增强搜索：LLM 翻译中文 → ITAD 搜索
+        search_keyword = keyword
+        if re.search(r"[\u4e00-\u9fff]", keyword):
+            search_keyword = await self._translate_to_english(keyword)
+
+        itad_results: list[dict] = []
+        if self._itad_client:
+            try:
+                itad_results = await self._itad_client.search_games(
+                    search_keyword, limit=max_results
+                )
+            except Exception as e:
+                logger.warning(f"[steam] ITAD 搜索失败: {type(e).__name__}: {e}")
+
+        if not itad_results:
+            if results:
+                # ITAD 也无结果，但 Steam 有结果，展示 Steam 结果
+                async for r in self._send_search_results(event, results, keyword):
+                    yield r
+            else:
+                yield event.plain_result(f"🔍 搜索「{keyword}」未找到相关游戏")
+            return
+
+        # ITAD 结果需要补充 AppID（从 ITAD info 获取）和价格信息（从 Steam 获取）
+        enriched_itad: list[dict] = []
+        for item in itad_results:
+            appid = item.get("appid")
+            itad_id = item.get("id", "")
+
+            # AppID 缺失时通过 ITAD info 接口补充获取
+            if not appid and itad_id and self._itad_client:
+                try:
+                    info = await self._itad_client.fetch_game_info(itad_id)
+                    if isinstance(info, dict):
+                        appid = info.get("appid")
+                        if appid:
+                            logger.debug(f"[steam] ITAD 补充 AppID: {itad_id} -> {appid}")
+                except Exception as e:
+                    logger.debug(f"[steam] ITAD 补充 AppID 失败: {e}")
+
+            price_str = ""
+            if appid:
+                try:
+                    game_info = await self._service.get_game_info(
+                        appid, self._cc(), self._lang(), enrich=False
+                    )
+                    if not game_info.error and game_info.price_overview:
+                        p = game_info.price_overview
+                        price_str = p.final_formatted or ""
+                    elif game_info.is_free:
+                        price_str = "Free"
+                except Exception:
+                    pass
+            # 过滤掉 AppID 无效的结果（0 或 None），这些游戏不在 Steam 上
+            if not appid or appid == 0:
+                logger.debug(f"[steam] ITAD 结果 AppID 无效，跳过: {item.get('title', '?')}")
+                continue
+            enriched_itad.append({
+                "appid": appid,
+                "name": item.get("title", "未知游戏"),
+                "price": price_str,
+                "image_url": item.get("image_url", ""),
+            })
+
+        # ── LLM 校验 #2（ITAD 结果）──
+        validation2 = await self._llm_validate_search(keyword, enriched_itad)
+        match_level2 = validation2["match_level"]
+        matched_indices2 = validation2["matched_indices"]
+        is_single_precise2 = validation2["is_single_precise"]
+
+        if match_level2 == "high" and is_single_precise2 and len(matched_indices2) == 1:
+            precise_appid = enriched_itad[matched_indices2[0]].get("appid")
+            if precise_appid:
+                logger.info(f"[steam] ITAD 搜索精准匹配 AppID {precise_appid}，直出完整信息")
+                game, cc = await self._query_with_fallback(
+                    precise_appid, self._cc(), self._lang(),
+                    review_lang=self._review_lang(event.unified_msg_origin),
+                )
+                if not game.error:
+                    if game.short_description:
+                        max_len = self._max_desc()
+                        if len(game.short_description) > max_len:
+                            game.short_description = game.short_description[:max_len] + "..."
+                    text, image_url = formatter.format_game_info(game, cc)
+                    result = event.make_result().message(text)
+                    if image_url:
+                        result = result.url_image(image_url)
+                    yield result
+                    return
+                logger.warning(f"[steam] ITAD 精准匹配 AppID {precise_appid} 查询失败，回退搜索卡片")
+
+        if match_level2 == "high":
+            filtered2 = [enriched_itad[i] for i in matched_indices2 if i < len(enriched_itad)]
+            if filtered2:
+                async for r in self._send_search_results(event, filtered2, keyword):
+                    yield r
+                return
+
+        # 匹配度低 → 返回未找到
+        yield event.plain_result(f"🔍 搜索「{keyword}」暂未搜索到相关内容")
 
