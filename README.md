@@ -1,13 +1,14 @@
-# astrbot_plugin_steamstore_sniper
+# astrbot_plugin_steam_radar
 
 <p align="center">
-  <b>🎮 AstrBot Steam 商店速查插件</b><br>
-  无需登录账号即可通过 AppID 或商店链接快速查询 Steam 游戏信息，支持封面图、简介、多地区价格、分语言区评测。<br>
+  <b>🎮 AstrBot Steam 雷达插件</b><br>
+  一款功能强大的Steam 全能助手：游戏详情查询、多地区价格、截图、搜索、群愿望单、发售/史低自动通知。<br>
+  群愿望单支持跨群共享缓存、智能分层刷新、夜间模式、发售/史低 @提及通知。<br>
   可选接入 IsThereAnyDeal，额外显示社区标签、Steam 史低、订阅服务（Game Pass / EA Play 等）、集换卡牌信息。
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.3.5-blue?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-v0.4.2-blue?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="license">
   <img src="https://img.shields.io/badge/Python-3.10%2B-yellow?style=flat-square" alt="python">
   <img src="https://img.shields.io/badge/AstrBot-%3E%3D4.0.0-orange?style=flat-square" alt="astrbot">
@@ -28,8 +29,9 @@
 | 临时评测语言区切换 | `/steam_rlang` 为下一次查询设置评测统计语言，`/steam {appid} {语言代码}` 也可内联指定 |
 | URL 自动解析 | 白名单会话中发送 Steam 商店链接即自动触发查询，无需输入指令 |
 | 游戏搜索 | `/steam_search {关键词}` 搜索 Steam 游戏，支持中英文，精准匹配时直接输出完整游戏信息 |
-| 增强搜索（可选） | 开启 `enhanced_search` 后，Steam 搜索匹配度低时自动调用 ITAD 补充搜索，并通过 LLM 支持中文关键词翻译和结果校验。**注意：开启后每次搜索会消耗 AstrBot 主模型的 tokens** |
+| 增强搜索（可选） | 开启 `enhanced_search` 后，Steam 搜索匹配度低时自动调用 ITAD 补充搜索，并通过插件自有 LLM 支持中文关键词翻译和结果校验（需配置 `llm_api_url` + `llm_api_key`） |
 | 游戏截图查询 | `/steam_shots` 发送压缩拼接长图，默认全局屏蔽 R18，可由管理员通过 `/steam_adult on/off` 按会话切换豁免，QQ 平台触发风控时回退文本提示 |
+| 群愿望单 | `/wish_add` 添加、`/wish` 查询、`/wish_remove` 移除；跨群共享游戏缓存，智能分层刷新，发售/史低自动通知（需配置 `itad_api_key`） |
 | 访问控制（ACL） | 支持白名单 / 黑名单 / 关闭三种模式，按 UMO 精确控制使用权限 |
 
 ### 增强功能（需配置 `itad_api_key`）
@@ -54,7 +56,7 @@ API Key 免费申请：[https://isthereanydeal.com/apps/my/](https://isthereanyd
 
 **方式一：通过 AstrBot 插件市场安装（推荐）**
 
-在 AstrBot WebUI 中进入 **插件市场**，搜索 `steamstore_sniper`，点击安装，等待完成后重启即可。
+在 AstrBot WebUI 中进入 **插件市场**，搜索 `steam_radar`，点击安装，等待完成后重启即可。
 
 **方式二：手动安装**
 
@@ -63,10 +65,10 @@ API Key 免费申请：[https://isthereanydeal.com/apps/my/](https://isthereanyd
 cd data/plugins/
 
 # 克隆仓库
-git clone https://github.com/NorNeko/astrbot_plugin_steamstore_sniper.git
+git clone https://github.com/NorNeko/astrbot_plugin_steam_radar.git
 ```
 
-完成后在 WebUI 插件管理页面启用 **Steam 商店速查**，重启 AstrBot 生效。
+完成后在 WebUI 插件管理页面启用 **Steam 雷达**，重启 AstrBot 生效。
 
 ### 2. 依赖
 
@@ -104,8 +106,25 @@ Pillow>=10.0.0    # 截图功能图像处理（/steam_shots 指令）
 | `/steam` 或 `/steam help` | 显示快速帮助（支持的命令和用法） |
 | `/steam_price {appid 或商店链接} {地区}` | 指定地区查询价格，如 `/steam_price 730 us` |
 | `/steam_search {关键词}` | 搜索 Steam 游戏（支持中英文关键词） |
+| `#N`（如 `#1`、`#2`） | 从上次搜索结果中选择指定序号的游戏查看详情（2 分钟内有效，按用户隔离） |
 | `/steam_shots {appid 或商店链接}` | 查询游戏截图长图（最多 N 张，WebUI 可配置） |
 | 直接发送 Steam 商店链接 | 开启 `auto_parse_enabled` 且通过 ACL 时自动解析 |
+
+### 群愿望单指令（需配置 `itad_api_key`）
+
+| 指令 | 说明 |
+|------|------|
+| `/wish_add {appid}` | 将游戏添加到当前群愿望单（支持多人重复添加） |
+| `/wish [页码]` | 查看当前群愿望单（每页 20 条，纯文本） |
+| `/wish_remove {appid}` | 从当前群愿望单移除游戏（权限可配置） |
+
+**说明**：
+- 群愿望单为高级功能，**未配置 `itad_api_key` 时完全禁用**
+- 愿望单按群聊隔离，每个群共享一个愿望单
+- 同一游戏被多群添加时，全局缓存共享，API 只拉取一次
+- 智能分层刷新：热层（打折/即将发售）每 6h、温层每 24h、冷层每 72h
+- 发售/史低自动通知：@提及添加者，通知后销毁记录
+- 夜间模式：配置时段内通知排队，白天批量发送
 
 ### 配置和管理指令（正则表达式）
 
@@ -149,8 +168,11 @@ https://store.steampowered.com/app/2989760/_/
 | `request_timeout` | 整数 | `10` | 请求超时秒数（5–30） |
 | `rate_limit_per_minute` | 整数 | `4` | 全局查询频率上限（次/分钟），0 = 不限制 |
 | `proxy` | 字符串 | `http://127.0.0.1:7897` | 代理地址，留空禁用 |
-| `itad_api_key` | 字符串 | — | IsThereAnyDeal API Key，留空禁用 ITAD 增强功能 |
-| `enhanced_search` | 布尔 | `false` | 启用增强搜索（ITAD）。开启后，当 Steam 官方搜索结果匹配度较低时，自动调用 ITAD 搜索接口进行补充搜索，并调用 AstrBot LLM 支持中文关键词搜索和结果校验。需要配置 `itad_api_key` 才能生效。**注意：开启后每次搜索会消耗 AstrBot 主模型的 tokens（每次搜索约 2-3 次 LLM 调用）** |
+| `itad_api_key` | 字符串 | — | IsThereAnyDeal API Key，留空禁用 ITAD 增强功能和群愿望单 |
+| `enhanced_search` | 布尔 | `false` | 启用增强搜索（ITAD）。开启后，当 Steam 官方搜索结果匹配度较低时，自动调用 ITAD 搜索接口进行补充搜索，并调用插件自有 LLM 支持中文关键词搜索和结果校验。需要配置 `itad_api_key` 和 LLM 相关配置才能完全生效 |
+| `llm_api_url` | 字符串 | — | OpenAI 兼容的 LLM API 地址（如 `https://api.openai.com/v1/chat/completions`）。留空则禁用 LLM 功能 |
+| `llm_api_key` | 字符串 | — | LLM API Key。留空则禁用 LLM 功能 |
+| `llm_model` | 字符串 | `gpt-3.5-turbo` | LLM 模型名称 |
 | `search_max_results` | 整数 | `5` | `/steam_search` 每次最多显示的搜索结果条数（1–10） |
 | `max_description_length` | 整数 | `200` | 简介最大字符数，0 = 不截断 |
 | `acl_mode` | 字符串 | `Off` | 访问控制模式：`Off` / `Whitelist` / `Blacklist` |
@@ -162,6 +184,11 @@ https://store.steampowered.com/app/2989760/_/
 | `screenshot_width` | 整数 | `600` | 拼接长图时每张缩略图的目标宽度 |
 | `screenshot_stitch_max_kb` | 整数 | `200` | 拼接长图体积上限，超限时自动继续压缩 |
 | `cc_fallback_order` | 字符串 | `hk;jp;us` | 当前地区不可见时的自动回退顺序，英文分号分隔 |
+| `wishlist_enabled` | 布尔 | `true` | 群愿望单功能总开关。关闭后所有愿望单指令不可用，定时刷新和通知也停止 |
+| `wishlist_admin_umos` | 列表（UMO） | `[]` | 愿望单管理员 UMO 列表。为空时所有群成员均可移除愿望单条目 |
+| `wishlist_refresh_hours` | 整数 | `6` | 热层刷新间隔（小时），温层=×4（24h），冷层=×12（72h） |
+| `wishlist_night_start` | 字符串 | `23:00` | 夜间模式开始时间 |
+| `wishlist_night_end` | 字符串 | `08:00` | 夜间模式结束时间 |
 
 > **获取会话 UMO**：向机器人发送 `/sid`，即可查看当前会话的唯一标识符，用于填写 `allowed_list` / `banned_list`。
 

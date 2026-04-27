@@ -1,12 +1,25 @@
-name: astrbot_plugin_steamstore_sniper
-display_name: Steam 商店速查
-desc: 无需登录账号即可通过 AppID 或商店链接快速查询 Steam 游戏信息，支持封面图、简介、多地区价格、分语言区评测。
+name: astrbot_plugin_steam_radar
+display_name: Steam 雷达
+desc: Steam 全能助手：游戏详情查询、多地区价格、截图、搜索、群愿望单、发售/史低自动通知。
 help: |
+  【基础查询】
   /steam {appid}                查询游戏详情（通过 AppID）
+  /steam {appid} {语言代码}     指定评测语言区查询
   /steam_price {appid} {地区}   指定地区查询价格，如 /steam_price 730 us
   /steam_search {关键词}        搜索 Steam 游戏（支持中英文）
+  /steam_shots {appid}          查询游戏截图长图
   /steam help                   显示帮助信息
   发送 Steam 商店链接可自动解析（需开启自动解析功能）
-version: v0.3.5
+  #N（如 #1、#2）               从搜索结果中选择指定游戏（2分钟内有效）
+
+  【群愿望单】（需配置 itad_api_key）
+  /wish_add {appid}             将游戏添加到群愿望单
+  /wish [页码]                  查看群愿望单（每页20条）
+  /wish_remove {appid}          从群愿望单移除游戏
+
+  【配置管理】
+  /steam_rlang [语言代码]       设置评测语言区（无参查看帮助）
+  /steam_adult on|off|status    管理 R18 截图屏蔽名单
+version: v0.4.2
 author: B2347
-repo: https://github.com/NorNeko/astrbot_plugin_steamstore_sniper
+repo: https://github.com/NorNeko/astrbot_plugin_steam_radar

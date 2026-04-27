@@ -56,9 +56,27 @@
     },
     "enhanced_search": {
         "description": "启用增强搜索（ITAD）",
-        "hint": "开启后，当 Steam 官方搜索结果匹配度较低时，自动调用 ITAD 搜索接口进行补充搜索。需要配置上方的 itad_api_key 才能生效。开启后还会调用 AstrBot LLM 支持中文关键词搜索（需 AstrBot 已配置 LLM Provider）。",
+        "hint": "开启后，当 Steam 官方搜索结果匹配度较低时，自动调用 ITAD 搜索接口进行补充搜索。需要配置上方的 itad_api_key 才能生效。开启后还会调用下方配置的 LLM 支持中文关键词搜索和结果校验。",
         "type": "bool",
         "default": false
+    },
+    "llm_api_url": {
+        "description": "LLM API 地址",
+        "hint": "OpenAI 兼容的 Chat Completions API 地址。示例：https://api.openai.com/v1/chat/completions 或其他兼容接口。留空则禁用 LLM 功能（增强搜索降级为纯 ITAD 搜索）。",
+        "type": "string",
+        "default": ""
+    },
+    "llm_api_key": {
+        "description": "LLM API Key",
+        "hint": "用于增强搜索的 LLM API Key。留空则禁用 LLM 功能。",
+        "type": "string",
+        "default": ""
+    },
+    "llm_model": {
+        "description": "LLM 模型名称",
+        "hint": "使用的模型名称，如 gpt-3.5-turbo、gpt-4o-mini 等。",
+        "type": "string",
+        "default": "gpt-3.5-turbo"
     },
     "max_description_length": {
         "description": "简介最大字符数",
@@ -151,5 +169,40 @@
             "step": 1
         },
         "default": 5
+    },
+    "wishlist_admin_umos": {
+        "description": "愿望单管理员（UMO 列表）",
+        "hint": "可移除愿望单条目的管理员 UMO 列表。为空时所有群成员均可移除。每条填写完整 UMO，如：aiocqhttp:GroupMessage:123456。通过 /sid 获取当前会话 UMO。",
+        "type": "list",
+        "default": []
+    },
+    "wishlist_refresh_hours": {
+        "description": "愿望单热层刷新间隔（小时）",
+        "hint": "热层（正在打折或即将发售的游戏）的刷新间隔。温层=×4（默认24h），冷层=×12（默认72h）。刷新在用户查询愿望单时惰性触发，非后台循环。",
+        "type": "int",
+        "slider": {
+            "min": 1,
+            "max": 24,
+            "step": 1
+        },
+        "default": 6
+    },
+    "wishlist_enabled": {
+        "description": "启用群愿望单功能",
+        "hint": "群愿望单功能总开关。关闭后所有愿望单指令不可用，定时刷新和通知也停止。开启时还需要配置 itad_api_key 才能生效。",
+        "type": "bool",
+        "default": true
+    },
+    "wishlist_night_start": {
+        "description": "夜间模式开始时间",
+        "hint": "夜间时段开始时间（HH:MM 格式）。夜间时段内通知不发送，排队等待白天批量发送。刷新任务正常执行。",
+        "type": "string",
+        "default": "23:00"
+    },
+    "wishlist_night_end": {
+        "description": "夜间模式结束时间",
+        "hint": "夜间时段结束时间（HH:MM 格式）。支持跨午夜范围（如 23:00 ~ 08:00）。",
+        "type": "string",
+        "default": "08:00"
     }
 }

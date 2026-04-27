@@ -4,6 +4,8 @@ import json as _json
 from pathlib import Path
 import re
 import tempfile
+import time
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from astrbot.api import logger
@@ -15,10 +17,13 @@ from .core.store_service import StoreService
 from .core.itad_client import ITADClient
 from .core.security_acl import SecurityACL
 from .core.image_utils import stitch_images_vertical
+from .core.wishlist_manager import WishlistManager
+from .core.llm_client import LLMClient
 from .core import formatter
 
 if TYPE_CHECKING:
     from .models.store_models import SteamGameInfo
+    from .models.wishlist_models import WishlistGameCache
 
 # 从 Steam 商店链接中提取 AppID（定版规则：开发圣经 §5.2）
 _URL_APPID_RE = re.compile(r"store\.steampowered\.com/app/(\d+)")
@@ -78,6 +83,26 @@ class SteamStoreSniperPlugin(Star):
             if itad_key else None
         )
 
+        # LLM 客户端：插件自有，不依赖 AstrBot LLM Provider
+        llm_api_url = str(config.get("llm_api_url", "")).strip()
+        llm_api_key = str(config.get("llm_api_key", "")).strip()
+        llm_model = str(config.get("llm_model", "gpt-3.5-turbo")).strip()
+        if llm_api_url and llm_api_key:
+            self._llm_client: LLMClient | None = LLMClient(
+                api_url=llm_api_url,
+                api_key=llm_api_key,
+                model=llm_model,
+                timeout=int(config.get("request_timeout", 15)),
+                proxy=proxy,
+            )
+        else:
+            self._llm_client = None
+            if config.get("enhanced_search", False):
+                logger.warning(
+                    "[steam] 增强搜索已开启但 LLM 未配置（llm_api_url / llm_api_key 为空），"
+                    "搜索校验和中文翻译将不可用。请在插件配置页填写 LLM API 信息后重载插件。"
+                )
+
         self._service = StoreService(self._client, itad_client=self._itad_client)
         self._acl = SecurityACL(
             acl_mode=config.get("acl_mode", "Off"),
@@ -87,17 +112,35 @@ class SteamStoreSniperPlugin(Star):
         # 会话级评测语言区覆盖：键为 unified_msg_origin，值为语言代码
         self._session_review_lang: dict[str, str] = {}
 
+        # 搜索结果选择缓存：键为 sender_id（QQ号），值为 {"items": [...], "expires": float}
+        # 用于 /steam_search 返回多条结果后，用户通过 #N 选择指定游戏
+        self._search_select_cache: dict[str, dict] = {}
+        self._SEARCH_CACHE_TTL = 120.0  # 2 分钟过期
+
+        # ── 群愿望单 ──
+        self._wishlist = WishlistManager(data_dir=Path(__file__).parent)
+        self._wishlist_refresh_lock = asyncio.Lock()
+
     async def initialize(self):
         await self._client.create_session()
         if self._itad_client:
             await self._itad_client.create_session()
             logger.info("[steam] ITAD 客户端已初始化")
+        if self._llm_client:
+            await self._llm_client.create_session()
+            logger.info("[steam] LLM 客户端已初始化")
+        # 加载愿望单数据
+        await self._wishlist.load_from_disk()
         logger.info("[steam] 插件已初始化")
 
     async def terminate(self):
         await self._client.close_session()
         if self._itad_client:
             await self._itad_client.close_session()
+        if self._llm_client:
+            await self._llm_client.close_session()
+        # 保存愿望单数据
+        await self._wishlist.save_to_disk()
         logger.info("[steam] 插件已卸载")
 
     # ------------------------------------------------------------------
@@ -269,7 +312,7 @@ class SteamStoreSniperPlugin(Star):
 
         if not arg or arg.lower() == "help":
             yield event.plain_result(
-                "🎮 Steam 商店速查指令列表\n\n"
+                "🎮 Steam 雷达指令列表\n\n"
                 "【基础查询】\n"
                 "  /steam {appid}                         查询游戏详情\n"
                 "  /steam {appid} {语言代码}               指定评测语言区查询\n"
@@ -658,11 +701,43 @@ class SteamStoreSniperPlugin(Star):
         itad_key = str(self.config.get("itad_api_key", "")).strip()
         return bool(itad_key) and self._itad_client is not None
 
+    def _llm_available(self) -> bool:
+        """检查 LLM 客户端是否可用（用于搜索校验和翻译）。"""
+        return self._llm_client is not None
+
     def _search_max_results(self) -> int:
         try:
             return max(1, min(10, int(self.config.get("search_max_results", 5))))
         except (TypeError, ValueError):
             return 5
+
+    # ------------------------------------------------------------------
+    # 搜索结果选择缓存（#N 选择功能）
+    # ------------------------------------------------------------------
+
+    def _store_search_cache(self, sender_id: str, items: list[dict]) -> None:
+        """为指定用户缓存搜索结果列表，2 分钟后自动过期。"""
+        self._search_select_cache[sender_id] = {
+            "items": items,
+            "expires": time.monotonic() + self._SEARCH_CACHE_TTL,
+        }
+
+    def _get_search_cache(self, sender_id: str) -> list[dict] | None:
+        """获取用户的搜索结果缓存，过期则返回 None 并清理。"""
+        entry = self._search_select_cache.get(sender_id)
+        if entry is None:
+            return None
+        if time.monotonic() > entry["expires"]:
+            del self._search_select_cache[sender_id]
+            return None
+        return entry["items"]
+
+    def _cleanup_expired_search_cache(self) -> None:
+        """清理所有过期的搜索缓存条目（惰性清理，无日志输出）。"""
+        now = time.monotonic()
+        expired_keys = [k for k, v in self._search_select_cache.items() if now > v["expires"]]
+        for k in expired_keys:
+            del self._search_select_cache[k]
 
     async def _llm_validate_search(
         self, keyword: str, results: list[dict]
@@ -678,107 +753,19 @@ class SteamStoreSniperPlugin(Star):
             "is_single_precise": len(results) == 1,
         }
 
-        try:
-            provider = self.context.get_using_provider()
-        except Exception:
-            logger.debug("[steam] LLM Provider 不可用，跳过搜索校验")
+        if not self._llm_client:
+            logger.debug("[steam] LLM 客户端未配置，跳过搜索校验")
             return default_result
 
-        # 构建结果列表文本
-        items_text = "\n".join(
-            f"  {i}. {r.get('name', '未知')} (AppID {r.get('appid', '?')}) — {r.get('price', '未知')}"
-            for i, r in enumerate(results)
-        )
-
-        prompt = (
-            f"你是一个 Steam 游戏搜索结果评估器。你的唯一任务是评估下方列表中的结果与用户搜索意图的匹配度。\n"
-            f"你绝对不能自行搜索、联想、推荐或补充任何不在列表中的游戏。\n\n"
-            f"用户搜索了「{keyword}」。\n\n"
-            f"以下是 Steam 商店搜索返回的结果列表（仅限这些结果，不要引入其他游戏）：\n{items_text}\n\n"
-            f"评估规则：\n"
-            f"1. 仅评估列表中已有的结果，不要自行补充或推荐任何不在列表中的游戏。\n"
-            f"2. 如果用户搜索的是一个游戏系列的通用名（如\"Dark Souls\"、\"Hollow Knight\"），"
-            f"该系列的所有续作/衍生作都应视为高匹配度。\n"
-            f"3. 如果用户搜索中包含了明确的编号或副标题（如\"Dark Souls 3\"、\"Hollow Knight Silksong\"），"
-            f"则只有对应的那一作是高匹配度。\n"
-            f"4. DLC、原声带、粉丝扩展等衍生内容应视为低匹配度，除非用户明确搜索了它们。\n"
-            f"5. 列表中的游戏名与用户搜索意图完全不相关时为低匹配度。\n\n"
-            f"返回 JSON（只返回 JSON，不要返回其他内容）：\n"
-            f'{{"match_level": "high" 或 "low", "matched_indices": [匹配的结果序号，从0开始], '
-            f'"is_single_precise": true 或 false, "reason": "简短说明"}}'
-        )
-
-        try:
-            response = await asyncio.wait_for(
-                provider.text_chat(
-                    prompt=prompt,
-                    contexts=[],
-                    image_urls=[],
-                    func_tool=None,
-                    system_prompt=(
-                        "你是一个 Steam 游戏搜索结果评估器。你的唯一职责是评估给定列表中游戏与用户搜索意图的匹配度。"
-                        "严禁自行搜索、联想、推荐或补充任何不在列表中的游戏。只返回 JSON 格式的结果。"
-                    ),
-                ),
-                timeout=15.0,
-            )
-            text = response.completion_text.strip()
-            # 尝试提取 JSON（可能被 markdown 代码块包裹）
-            json_match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
-            if json_match:
-                parsed = _json.loads(json_match.group())
-                match_level = parsed.get("match_level", "high")
-                matched_indices = parsed.get("matched_indices", [])
-                is_single_precise = parsed.get("is_single_precise", False)
-                # 校验 matched_indices 范围
-                matched_indices = [i for i in matched_indices if 0 <= i < len(results)]
-                if not matched_indices:
-                    matched_indices = list(range(len(results)))
-                logger.info(
-                    f"[steam] LLM 搜索校验: level={match_level} "
-                    f"indices={matched_indices} single={is_single_precise} "
-                    f"reason={parsed.get('reason', '')}"
-                )
-                return {
-                    "match_level": match_level,
-                    "matched_indices": matched_indices,
-                    "is_single_precise": bool(is_single_precise),
-                }
-        except asyncio.TimeoutError:
-            logger.warning("[steam] LLM 搜索校验超时（15s），回退为默认。请检查 LLM Provider 网络连接或代理配置")
-        except Exception as e:
-            logger.warning(f"[steam] LLM 搜索校验失败（回退为默认）: {type(e).__name__}: {e}。请检查 LLM Provider 配置")
-
-        return default_result
+        return await self._llm_client.validate_search_results(keyword, results)
 
     async def _translate_to_english(self, chinese_text: str) -> str:
         """调用 LLM 将中文翻译为 Steam 英文游戏名。失败时返回原文。"""
-        try:
-            provider = self.context.get_using_provider()
-            response = await asyncio.wait_for(
-                provider.text_chat(
-                    prompt=(
-                        f"请将以下游戏名翻译为 Steam 商店页面上的英文官方名称。\n"
-                        f"规则：仅输出英文名，不要输出其他任何内容。如果该游戏不在 Steam 平台上，"
-                        f"请原样输出输入的游戏名，不要编造或联想其他游戏。\n"
-                        f"游戏名：{chinese_text}"
-                    ),
-                    contexts=[],
-                    image_urls=[],
-                    func_tool=None,
-                    system_prompt="你是一个游戏名称翻译器。仅将中文游戏名翻译为 Steam 商店的英文官方名称。不要编造、联想或推荐任何游戏。仅输出英文名。",
-                ),
-                timeout=15.0,
-            )
-            translated = response.completion_text.strip()
-            if translated:
-                logger.info(f"[steam] LLM 翻译: {chinese_text!r} -> {translated!r}")
-                return translated
-        except asyncio.TimeoutError:
-            logger.warning("[steam] LLM 翻译超时（15s），使用原始关键词。请检查 LLM Provider 网络连接或代理配置")
-        except Exception as e:
-            logger.warning(f"[steam] LLM 翻译失败: {type(e).__name__}: {e}。请检查 LLM Provider 配置")
-        return chinese_text
+        if not self._llm_client:
+            logger.debug("[steam] LLM 客户端未配置，跳过翻译")
+            return chinese_text
+
+        return await self._llm_client.translate_to_english(chinese_text)
 
     async def _download_image_bytes(self, url: str) -> bytes | None:
         """下载图片字节，失败时返回 None。"""
@@ -800,7 +787,13 @@ class SteamStoreSniperPlugin(Star):
         逐条发送搜索结果：封面缩略图 + 文字描述。
         每条结果作为一个独立消息发送（图片+文字），实现"文字夹带封面缩略图"效果。
         图片发送失败时跳过该条图片，仅发送文字。
+        多条结果时缓存到用户选择缓存（2 分钟），并提示 #N 选择。
         """
+        # 多条结果时缓存到用户选择缓存
+        sender_id = event.get_sender_id()
+        if sender_id and len(results) > 1:
+            self._store_search_cache(sender_id, results)
+
         # 先发送标题行
         yield event.plain_result(
             f"🔍 搜索「{keyword}」找到 {len(results)} 个相关结果："
@@ -824,6 +817,12 @@ class SteamStoreSniperPlugin(Star):
                 yield result
             else:
                 yield event.plain_result(text)
+
+        # 多条结果时提示 #N 选择
+        if len(results) > 1:
+            yield event.plain_result(
+                f"💡 输入 #1 ~ #{len(results)} 选择指定游戏查看详情（2 分钟内有效）"
+            )
 
     # ------------------------------------------------------------------
     # 指令：/steam_search（游戏搜索）
@@ -1013,4 +1012,624 @@ class SteamStoreSniperPlugin(Star):
 
         # 匹配度低 → 返回未找到
         yield event.plain_result(f"🔍 搜索「{keyword}」暂未搜索到相关内容")
+
+    # ------------------------------------------------------------------
+    # 正则指令：#N 选择搜索结果中的指定游戏（2 分钟缓存）
+    # ------------------------------------------------------------------
+
+    @filter.regex(r"^#(\d{1,2})$")
+    async def cmd_select_search_result(self, event: AstrMessageEvent):
+        """从上次搜索结果中选择指定序号的游戏。用法：#1、#2 等"""
+        sender_id = event.get_sender_id()
+        if not sender_id:
+            return
+
+        # 惰性清理过期缓存
+        self._cleanup_expired_search_cache()
+
+        m = re.match(r"^#(\d{1,2})$", event.message_str.strip())
+        if not m:
+            return
+
+        idx = int(m.group(1))
+        items = self._get_search_cache(sender_id)
+        if not items:
+            return  # 无缓存或已过期，静默忽略
+
+        if idx < 1 or idx > len(items):
+            yield event.plain_result(
+                f"序号 #{idx} 超出范围（共 {len(items)} 条结果）。请输入 1-{len(items)} 之间的数字。"
+            )
+            return
+
+        selected = items[idx - 1]
+        appid = selected.get("appid")
+        if not appid:
+            yield event.plain_result("该结果无有效 AppID，无法查询。")
+            return
+
+        # 清除该用户的缓存（选择后不再需要）
+        self._search_select_cache.pop(sender_id, None)
+
+        # 复用完整查询链路（与 /steam 指令一致）
+        logger.info(f"[steam] 用户 {sender_id} 选择搜索结果 #{idx} → AppID {appid}")
+        game, cc = await self._query_with_fallback(
+            appid, self._cc(), self._lang(),
+            review_lang=self._review_lang(event.unified_msg_origin),
+        )
+        if game.error:
+            yield event.plain_result(f"查询失败：{game.error}")
+            return
+
+        if game.short_description:
+            max_len = self._max_desc()
+            if len(game.short_description) > max_len:
+                game.short_description = game.short_description[:max_len] + "..."
+
+        text, image_url = formatter.format_game_info(game, cc)
+        result = event.make_result().message(text)
+        if image_url:
+            result = result.url_image(image_url)
+        yield result
+
+    # ------------------------------------------------------------------
+    # 愿望单辅助方法
+    # ------------------------------------------------------------------
+
+    def _wishlist_enabled(self) -> bool:
+        """检查愿望单功能是否可用（需要总开关开启 + ITAD API Key）。"""
+        if not self.config.get("wishlist_enabled", True):
+            return False
+        itad_key = str(self.config.get("itad_api_key", "")).strip()
+        return bool(itad_key) and self._itad_client is not None
+
+    def _wishlist_admin_umos(self) -> list[str]:
+        """获取愿望单管理员 UMO 列表。"""
+        raw = self.config.get("wishlist_admin_umos", []) or []
+        return [str(x).strip() for x in raw if str(x).strip()]
+
+    def _is_wishlist_admin(self, umo: str) -> bool:
+        """检查指定 UMO 是否为愿望单管理员。"""
+        admins = self._wishlist_admin_umos()
+        if not admins:
+            return True  # 管理员列表为空时所有人均可操作
+        return umo in admins
+
+    async def _wishlist_fetch_game_info(self, appid: int) -> "WishlistGameCache | None":
+        """
+        从 Steam + ITAD 获取游戏信息，构建 WishlistGameCache。
+        失败时返回 None。
+        """
+        cc = self._cc()
+        lang = self._lang()
+
+        # 获取 Steam 基础信息
+        try:
+            data = await self._client.fetch_app_details(appid, cc, lang)
+        except SteamAPIError as e:
+            logger.warning(f"[wishlist] AppID {appid} Steam 查询失败: {e}")
+            return None
+
+        entry = WishlistGameCache(
+            appid=appid,
+            name=data.get("name", "未知游戏"),
+            header_image=data.get("header_image"),
+            is_free=bool(data.get("is_free", False)),
+        )
+
+        # 发售状态
+        rd = data.get("release_date") or {}
+        entry.coming_soon = bool(rd.get("coming_soon", False))
+        entry.release_date_str = rd.get("date") or None
+        if entry.coming_soon:
+            entry.release_display = f"预计{entry.release_date_str}发售" if entry.release_date_str else "暂未发售"
+        else:
+            entry.is_released = True
+            entry.release_display = "已发售"
+
+        # 价格信息
+        price_raw = data.get("price_overview")
+        if price_raw:
+            entry.current_price = price_raw.get("final_formatted")
+            entry.currency = price_raw.get("currency")
+            entry.discount_percent = int(price_raw.get("discount_percent") or 0)
+            entry.is_on_sale = entry.discount_percent > 0
+            if entry.is_on_sale:
+                entry.initial_price = price_raw.get("initial_formatted")
+        elif entry.is_free:
+            entry.current_price = "Free"
+
+        # coming_soon + 有价格 → 可预购
+        if entry.coming_soon and entry.current_price:
+            entry.is_preorder = True
+
+        # ITAD 史低信息
+        if self._itad_client:
+            try:
+                itad_id = await self._itad_client.lookup_itad_id(appid)
+                if itad_id:
+                    low = await self._itad_client.fetch_steam_low(itad_id, cc.upper())
+                    if low:
+                        price_obj = low.get("price") or {}
+                        entry.history_low_price = price_obj.get("amount")
+                        entry.history_low_currency = price_obj.get("currency")
+                        entry.history_low_date = (low.get("timestamp") or "")[:10] or None
+                        # 判断是否处于史低
+                        if entry.history_low_price is not None and entry.current_price:
+                            # 从格式化价格中提取数字进行比较
+                            import re as _re
+                            price_match = _re.search(r"[\d,.]+", entry.current_price)
+                            if price_match:
+                                try:
+                                    current_num = float(price_match.group().replace(",", ""))
+                                    if abs(current_num - entry.history_low_price) < 0.01:
+                                        entry.is_at_history_low = True
+                                except ValueError:
+                                    pass
+            except Exception as e:
+                logger.debug(f"[wishlist] ITAD 史低查询失败 appid={appid}: {e}")
+
+        entry.last_updated = datetime.now().isoformat()
+        return entry
+
+    # ------------------------------------------------------------------
+    # 指令：/wish_add（添加游戏到群愿望单）
+    # ------------------------------------------------------------------
+
+    @filter.regex(r"^/?wish_add\s+(\d+)")
+    async def cmd_wish_add(self, event: AstrMessageEvent):
+        """将游戏添加到群愿望单。用法：/wish_add {appid}"""
+        if not await self._acl.check_access(event.unified_msg_origin):
+            yield event.plain_result("权限不足：您所在的群组或账户未被授权使用此功能。")
+            return
+
+        if not self._wishlist_enabled():
+            yield event.plain_result("愿望单功能需要配置 ITAD API Key，请在插件配置页填写后重载插件。")
+            return
+
+        m = re.search(r"^/?wish_add\s+(\d+)", event.message_str.strip(), re.IGNORECASE)
+        if not m:
+            yield event.plain_result("用法：/wish_add {appid}")
+            return
+
+        appid = int(m.group(1))
+        umo = event.unified_msg_origin
+        sender_id = event.get_sender_id() or ""
+        sender_name = event.get_sender_name() or sender_id
+
+        from .models.wishlist_models import WishAdder
+
+        adder = WishAdder(
+            sender_id=sender_id,
+            sender_name=sender_name,
+            added_at=datetime.now().isoformat(),
+        )
+
+        # 检查当前群是否已存在该游戏
+        existing_adders = self._wishlist.get_group_wishlist(umo).get(appid)
+        if existing_adders:
+            # 已存在：追加添加者
+            is_new = self._wishlist.add_to_group(umo, appid, adder)
+            if is_new:
+                count = len(self._wishlist.get_group_wishlist(umo).get(appid, []))
+                await self._wishlist.save_to_disk()
+                yield event.plain_result(
+                    f"✅ 已添加到群愿望单，您是第 {count} 位关注者\n"
+                    f"游戏：{(g := self._wishlist.get_game(appid)) and g.name or appid}"
+                )
+            else:
+                yield event.plain_result("您已关注该游戏，无需重复添加。")
+            return
+
+        # 不存在：检查全局缓存 → 有则复用，无则 API 拉取
+        cached = self._wishlist.get_game(appid)
+        if cached is None:
+            yield event.plain_result("⏳ 正在查询游戏信息，请稍候...")
+            cached = await self._wishlist_fetch_game_info(appid)
+            if cached is None:
+                yield event.plain_result(f"❌ AppID {appid} 查询失败，请检查 AppID 是否正确。")
+                return
+            self._wishlist.set_game(cached)
+
+        # 写入群愿望单
+        self._wishlist.add_to_group(umo, appid, adder)
+        await self._wishlist.save_to_disk()
+
+        # 确认消息
+        name = cached.name or f"AppID {appid}"
+        release = cached.release_display
+        price_info = ""
+        if cached.is_free:
+            price_info = " · 免费"
+        elif cached.current_price:
+            price_info = f" · {cached.current_price}"
+            if cached.is_on_sale:
+                price_info += f"（-{cached.discount_percent}%）"
+
+        low_info = ""
+        if cached.history_low_price is not None:
+            low_info = f"\n💸 史低 {cached.history_low_currency} {cached.history_low_price:.2f}"
+            if cached.history_low_date:
+                low_info += f"（{cached.history_low_date}）"
+
+        yield event.plain_result(
+            f"✅ 已添加到群愿望单\n"
+            f"🎮 {name}（{appid}）\n"
+            f"📅 {release}{price_info}{low_info}"
+        )
+
+    # ------------------------------------------------------------------
+    # 指令：/wish（查询群愿望单）
+    # ------------------------------------------------------------------
+
+    @filter.regex(r"^/?wish(?:\s+(\d+))?$")
+    async def cmd_wish_list(self, event: AstrMessageEvent):
+        """查询群愿望单。用法：/wish [页码]"""
+        if not await self._acl.check_access(event.unified_msg_origin):
+            yield event.plain_result("权限不足：您所在的群组或账户未被授权使用此功能。")
+            return
+
+        if not self._wishlist_enabled():
+            yield event.plain_result("愿望单功能需要配置 ITAD API Key，请在插件配置页填写后重载插件。")
+            return
+
+        umo = event.unified_msg_origin
+        appids = self._wishlist.get_group_appids(umo)
+
+        if not appids:
+            yield event.plain_result("📋 群愿望单为空，使用 /wish_add {appid} 添加游戏")
+            return
+
+        # 解析页码
+        m = re.match(r"^/?wish(?:\s+(\d+))?$", event.message_str.strip(), re.IGNORECASE)
+        page = int(m.group(1)) if m and m.group(1) else 1
+
+        page_size = 20
+        total = len(appids)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = max(1, min(page, total_pages))
+
+        start = (page - 1) * page_size
+        end = min(start + page_size, total)
+        page_appids = appids[start:end]
+
+        # 构建输出
+        lines: list[str] = []
+        lines.append(f"📋 群愿望单（第 {page}/{total_pages} 页 · 共 {total} 个游戏）\n")
+
+        for i, appid in enumerate(page_appids, start=start + 1):
+            game = self._wishlist.get_game(appid)
+            if game:
+                name = game.name
+                suffix = ""
+                if not game.is_released:
+                    suffix = f" — {game.release_display}"
+                lines.append(f"  {i}. {name}（{appid}）{suffix}")
+            else:
+                lines.append(f"  {i}. AppID {appid}（信息未加载）")
+
+        if total_pages > 1:
+            lines.append(f"\n输入 /wish {page + 1} 查看下一页" if page < total_pages else "")
+
+        yield event.plain_result("\n".join(lines))
+
+        # 惰性触发刷新检查（后台执行，不阻塞响应）
+        asyncio.create_task(self._wishlist_lazy_refresh())
+
+    async def _wishlist_lazy_refresh(self):
+        """惰性触发愿望单刷新（在 /wish 指令时后台执行）。"""
+        if self._wishlist_refresh_lock.locked():
+            return  # 已有刷新任务在执行
+
+        async with self._wishlist_refresh_lock:
+            try:
+                await self._check_and_refresh_wishlists()
+            except Exception as e:
+                logger.warning(f"[wishlist] 惰性刷新失败: {type(e).__name__}: {e}")
+
+    async def _check_and_refresh_wishlists(self):
+        """检查是否需要刷新，按层级分批执行。"""
+        now = time.monotonic()
+        refresh_hours = int(self.config.get("wishlist_refresh_hours", 6))
+
+        hot_interval = refresh_hours * 3600
+        warm_interval = hot_interval * 4
+        cold_interval = hot_interval * 12
+
+        needs_hot = now - self._wishlist.get_last_refresh("hot") >= hot_interval
+        needs_warm = now - self._wishlist.get_last_refresh("warm") >= warm_interval
+        needs_cold = now - self._wishlist.get_last_refresh("cold") >= cold_interval
+
+        if not (needs_hot or needs_warm or needs_cold):
+            return
+
+        all_games = self._wishlist.get_all_games()
+        if not all_games:
+            return
+
+        logger.info(
+            f"[wishlist] 开始刷新检查: hot={needs_hot} warm={needs_warm} cold={needs_cold} "
+            f"共 {len(all_games)} 个游戏"
+        )
+
+        # 分类
+        hot_games = []
+        warm_games = []
+        cold_games = []
+        for g in all_games:
+            tier = WishlistManager.classify_game(g)
+            if tier == "hot":
+                hot_games.append(g)
+            elif tier == "warm":
+                warm_games.append(g)
+            else:
+                cold_games.append(g)
+
+        changed = False
+
+        # 热层刷新
+        if needs_hot and hot_games:
+            changed |= await self._refresh_tier(hot_games, "hot")
+            self._wishlist.set_last_refresh("hot")
+
+        # 温层刷新
+        if needs_warm and warm_games:
+            changed |= await self._refresh_tier(warm_games, "warm")
+            self._wishlist.set_last_refresh("warm")
+
+        # 冷层刷新
+        if needs_cold and cold_games:
+            changed |= await self._refresh_tier(cold_games, "cold")
+            self._wishlist.set_last_refresh("cold")
+
+        # 处理通知
+        await self._process_pending_notifications()
+
+        if changed:
+            await self._wishlist.save_to_disk()
+
+        stats = self._wishlist.get_stats()
+        logger.info(
+            f"[wishlist] 刷新完成: {stats['unique_games']} 游戏, "
+            f"{stats['groups']} 群, {stats['pending_notifications']} 条待发通知"
+        )
+
+    async def _refresh_tier(self, games: list, tier_name: str) -> bool:
+        """刷新指定层级的游戏信息。返回是否有数据变化。"""
+        import random
+
+        changed = False
+        batch_size = 20
+
+        for batch_start in range(0, len(games), batch_size):
+            batch = games[batch_start:batch_start + batch_size]
+            for entry in batch:
+                try:
+                    entry_changed = await self._refresh_single_game(entry)
+                    if entry_changed:
+                        changed = True
+                except Exception as e:
+                    logger.warning(f"[wishlist] 刷新 {entry.appid} 失败: {e}")
+                await asyncio.sleep(random.uniform(2, 3))
+            await asyncio.sleep(5)  # 批间休息
+
+        return changed
+
+    async def _refresh_single_game(self, entry: "WishlistGameCache") -> bool:
+        """刷新单个游戏的信息。返回是否有数据变化。"""
+        old_released = entry.is_released
+        old_at_low = entry.is_at_history_low
+
+        # 未发售游戏 → 检查发售状态
+        if not entry.is_released:
+            try:
+                data = await self._client.fetch_app_details(entry.appid, self._cc(), self._lang())
+                if data and not data.get("coming_soon", True):
+                    entry.is_released = True
+                    entry.release_display = "已发售"
+                    # 更新价格信息
+                    price_raw = data.get("price_overview")
+                    if price_raw:
+                        entry.current_price = price_raw.get("final_formatted")
+                        entry.currency = price_raw.get("currency")
+                        entry.discount_percent = int(price_raw.get("discount_percent") or 0)
+                        entry.is_on_sale = entry.discount_percent > 0
+                        if entry.is_on_sale:
+                            entry.initial_price = price_raw.get("initial_formatted")
+                    elif data.get("is_free"):
+                        entry.is_free = True
+                        entry.current_price = "Free"
+            except SteamAPIError as e:
+                logger.debug(f"[wishlist] 发售状态检查失败 appid={entry.appid}: {e}")
+
+        # ITAD → 价格/史低
+        if self._itad_client:
+            try:
+                itad_id = await self._itad_client.lookup_itad_id(entry.appid)
+                if itad_id:
+                    low = await self._itad_client.fetch_steam_low(itad_id, self._cc().upper())
+                    if low:
+                        price_obj = low.get("price") or {}
+                        entry.history_low_price = price_obj.get("amount")
+                        entry.history_low_currency = price_obj.get("currency")
+                        entry.history_low_date = (low.get("timestamp") or "")[:10] or None
+                        # 判断是否处于史低
+                        if entry.history_low_price is not None and entry.current_price:
+                            import re as _re
+                            price_match = _re.search(r"[\d,.]+", entry.current_price)
+                            if price_match:
+                                try:
+                                    current_num = float(price_match.group().replace(",", ""))
+                                    entry.is_at_history_low = abs(current_num - entry.history_low_price) < 0.01
+                                except ValueError:
+                                    pass
+            except Exception as e:
+                logger.debug(f"[wishlist] ITAD 刷新失败 appid={entry.appid}: {e}")
+
+        # 更新变化检测字段
+        entry.was_released = old_released
+        entry.was_at_history_low = old_at_low
+        entry.last_updated = datetime.now().isoformat()  # type: ignore[union-attr]
+
+        return entry.is_released != old_released or entry.is_at_history_low != old_at_low
+
+    async def _process_pending_notifications(self):
+        """处理待发通知（新检测到的 + 夜间排队的）。"""
+        night_start = str(self.config.get("wishlist_night_start", "23:00"))
+        night_end = str(self.config.get("wishlist_night_end", "08:00"))
+
+        # 检测新变化并生成通知
+        new_notifications = self._detect_changes()
+
+        if WishlistManager.is_night_time(night_start, night_end):
+            # 夜间：存入队列
+            for notif in new_notifications:
+                self._wishlist.add_pending_notification(notif)
+            if new_notifications:
+                logger.info(f"[wishlist] 夜间模式：{len(new_notifications)} 条通知已排队")
+            return
+
+        # 白天：发送所有通知
+        all_notifications = self._wishlist.get_pending_notifications() + new_notifications
+        self._wishlist.clear_pending_notifications()
+
+        for notif in all_notifications:
+            for umo, adders in notif.affected_groups.items():
+                await self._send_wishlist_notification(umo, notif, adders)
+            # 通知完毕后销毁记录
+            self._remove_game_from_all_groups(notif.appid)
+
+    def _detect_changes(self) -> list:
+        """检测游戏状态变化，生成待发通知列表。"""
+        from .models.wishlist_models import PendingNotification
+
+        notifications = []
+        for entry in self._wishlist.get_all_games():
+            just_released = entry.is_released and not entry.was_released
+            just_hit_low = entry.is_at_history_low and not entry.was_at_history_low
+
+            if just_released or just_hit_low:
+                affected = self._wishlist.get_adders_for_game(entry.appid)
+                if affected:
+                    notif = PendingNotification(
+                        appid=entry.appid,
+                        game_name=entry.name or f"AppID {entry.appid}",
+                        notification_type="released" if just_released else "history_low",
+                        affected_groups=affected,
+                        detected_at=datetime.now().isoformat(),
+                    )
+                    notifications.append(notif)
+
+        return notifications
+
+    def _remove_game_from_all_groups(self, appid: int) -> None:
+        """从所有群的愿望单中移除指定游戏，并清理全局缓存。"""
+        all_umos = list(self._wishlist._wishlists.keys())
+        for umo in all_umos:
+            self._wishlist.remove_from_group(umo, appid)
+        # 所有群均已移除，删除全局缓存
+        self._wishlist.remove_game(appid)
+
+    async def _send_wishlist_notification(
+        self,
+        umo: str,
+        notif,
+        adders: list,
+    ):
+        """向指定群发送愿望单通知。"""
+        from .models.wishlist_models import PendingNotification
+
+        # 构建 @提及文本
+        at_parts: list[str] = []
+        for adder in adders:
+            if adder.sender_id:
+                at_parts.append(f"@{adder.sender_name or adder.sender_id}")
+
+        at_text = " ".join(at_parts) if at_parts else ""
+
+        if notif.notification_type == "released":
+            msg = (
+                f"🎮 愿望单提醒\n\n"
+                f"【{notif.game_name}】已正式发售！\n"
+                f"{at_text} 你们关注的游戏已上线，快去看看吧！\n\n"
+                f"🔗 https://store.steampowered.com/app/{notif.appid}/"
+            )
+        else:
+            game = self._wishlist.get_game(notif.appid)
+            price_info = ""
+            if game and game.current_price:
+                price_info = f"当前 {game.current_price}"
+                if game.discount_percent:
+                    price_info += f"（-{game.discount_percent}%）"
+                if game.history_low_price is not None:
+                    price_info += f" · 史低 {game.history_low_currency} {game.history_low_price:.2f}"
+                    if game.history_low_date:
+                        price_info += f"（{game.history_low_date}）"
+
+            msg = (
+                f"🎮 愿望单提醒\n\n"
+                f"【{notif.game_name}】正处于 Steam 史低价！\n"
+                f"{price_info}\n"
+                f"{at_text} 错过不再有！\n\n"
+                f"🔗 https://store.steampowered.com/app/{notif.appid}/"
+            )
+
+        # 尝试通过 AstrBot 发送消息到指定群
+        try:
+            # 使用 context 发送消息
+            result = self.context.make_message_result().message(msg)
+            await self.context.send_message(umo, result)
+            logger.info(f"[wishlist] 通知已发送到 {umo}: {notif.game_name} ({notif.notification_type})")
+        except Exception as e:
+            logger.warning(f"[wishlist] 通知发送失败 umo={umo}: {type(e).__name__}: {e}")
+
+    # ------------------------------------------------------------------
+    # 指令：/wish_remove（从群愿望单移除游戏）
+    # ------------------------------------------------------------------
+
+    @filter.regex(r"^/?wish_remove\s+(\d+)")
+    async def cmd_wish_remove(self, event: AstrMessageEvent):
+        """从群愿望单移除游戏。用法：/wish_remove {appid}"""
+        if not await self._acl.check_access(event.unified_msg_origin):
+            yield event.plain_result("权限不足：您所在的群组或账户未被授权使用此功能。")
+            return
+
+        if not self._wishlist_enabled():
+            yield event.plain_result("愿望单功能需要配置 ITAD API Key，请在插件配置页填写后重载插件。")
+            return
+
+        umo = event.unified_msg_origin
+
+        # 权限检查
+        if not self._is_wishlist_admin(umo):
+            yield event.plain_result("❌ 仅管理员可执行此操作。如需权限，请联系机器人管理员。")
+            return
+
+        m = re.search(r"^/?wish_remove\s+(\d+)", event.message_str.strip(), re.IGNORECASE)
+        if not m:
+            yield event.plain_result("用法：/wish_remove {appid}")
+            return
+
+        appid = int(m.group(1))
+
+        # 检查是否存在
+        group_wishlist = self._wishlist.get_group_wishlist(umo)
+        if appid not in group_wishlist:
+            yield event.plain_result(f"❌ AppID {appid} 不在当前群愿望单中。")
+            return
+
+        # 获取游戏名
+        game = self._wishlist.get_game(appid)
+        name = game.name if game else f"AppID {appid}"
+
+        # 从当前群移除
+        self._wishlist.remove_from_group(umo, appid)
+
+        # 检查全局缓存是否还有其他群引用
+        if not self._wishlist.is_game_referenced(appid, exclude_umo=umo):
+            self._wishlist.remove_game(appid)
+
+        await self._wishlist.save_to_disk()
+
+        yield event.plain_result(f"✅ 已从群愿望单移除：{name}（{appid}）")
 
