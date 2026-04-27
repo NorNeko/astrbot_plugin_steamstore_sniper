@@ -268,13 +268,25 @@ class SteamStoreSniperPlugin(Star):
 
         if not arg or arg.lower() == "help":
             yield event.plain_result(
-                "用法：\n"
-                "  /steam {appid}                  — 通过 AppID 查询游戏详情\n"
-                "  /steam {appid} {语言代码}       — 指定本次查询的评测语言区\n"
-                "  /steam_price {appid} {地区代码} — 指定地区查询价格\n"
-                "  /steam help                   — 显示此帮助\n"
-                "提示：发送 Steam 商店链接可自动解析（需开启自动解析功能）\n"
-                "评测语言区可选值：schinese、tchinese、japanese、english、all"
+                "🎮 Steam 商店速查指令列表\n\n"
+                "【基础查询】\n"
+                "  /steam {appid}                         查询游戏详情\n"
+                "  /steam {appid} {语言代码}               指定评测语言区查询\n"
+                "  /steam_price {appid} {地区}             指定地区查询价格\n"
+                "  /steam_shots {appid}                   查询游戏截图\n"
+                "  发送 Steam 商店链接                     开启自动解析时自动查询\n"
+                "  /steam help                           显示此帮助\n\n"
+                "【配置管理】\n"
+                "  /steam_rlang [语言代码]                设置评测语言区（无参查看帮助）\n"
+                "  /steam_adult status [UMO]             查看 R18 截图屏蔽名单\n"
+                "  /steam_adult on [UMO]                 加入屏蔽名单\n"
+                "  /steam_adult off [UMO]                移出屏蔽名单\n\n"
+                "【快速提示】\n"
+                "  • 评测语言：schinese | tchinese | japanese | english | all\n"
+                "  • 支持 AppID 和商店链接作为参数\n"
+                "  • 获取会话 UMO 标识：向机器人发送 /sid\n"
+                "  • /steam_rlang 仅对下一次查询生效（一次性）\n"
+                "  • /steam_adult 无参数时默认查看当前会话，附加 UMO 可远程管理其他群聊"
             )
             return
 

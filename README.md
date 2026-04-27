@@ -93,21 +93,34 @@ Pillow>=10.0.0    # 截图功能图像处理（/steam_shots 指令）
 
 ## 指令
 
+### 基础指令
+
 | 指令 | 说明 |
 |---|---|
 | `/steam {appid}` | 通过 AppID 查询游戏详情 |
 | `/steam {appid} {语言代码}` | 查询时临时指定本次评测语言区 |
-| 直接发送 Steam 商店链接 | 开启 `auto_parse_enabled` 且通过 ACL 时自动解析 |
+| `/steam` 或 `/steam help` | 显示快速帮助（支持的命令和用法） |
 | `/steam_price {appid 或商店链接} {地区}` | 指定地区查询价格，如 `/steam_price 730 us` |
-| `/steam_rlang {语言代码}` | 为下一次查询设置评测统计语言区 |
-| `/steam_rlang` | 查看当前语言区设置与可选值 |
 | `/steam_shots {appid 或商店链接}` | 查询游戏截图长图（最多 N 张，WebUI 可配置） |
-| `/steam_adult on \| off \| status [UMO]` | 管理 R18 截图屏蔽名单：默认全局不屏蔽。`on` 加入屏蔽名单，`off` 移除，`status` 查看。可在任意会话附加目标 UMO 远程管理其他群聊，省略则默认作用于当前会话，结果写回 WebUI 配置 |
-| `/steam help` | 显示指令帮助 |
+| 直接发送 Steam 商店链接 | 开启 `auto_parse_enabled` 且通过 ACL 时自动解析 |
 
-**评测语言代码**：`schinese`（简体中文区）/ `tchinese`（繁体中文区）/ `japanese`（日语区）/ `english`（英语区）/ `all`（全部语言）
+### 配置和管理指令（正则表达式）
 
-> 说明：当前 `/steam` 指令本身只接收 AppID；商店链接由自动解析处理器负责。`/steam_price` 与 `/steam_shots` 同时支持 AppID 和商店链接。
+| 指令 | 说明 |
+|---|---|
+| `/steam_rlang` | 查看当前评测语言区设置与可选值 |
+| `/steam_rlang {语言代码}` | 为下一次查询临时设置评测统计语言区（一次性生效） |
+| `/steam_adult status [UMO]` | 查询 R18 截图屏蔽名单状态；省略 UMO 查当前会话，附加 UMO 查指定会话 |
+| `/steam_adult on {UMO}` | 将指定 UMO 加入 R18 截图屏蔽名单；省略 UMO 时对当前会话操作 |
+| `/steam_adult off {UMO}` | 将指定 UMO 从 R18 截图屏蔽名单中移除；省略 UMO 时对当前会话操作 |
+
+**说明**：
+- 评测语言代码：`schinese`（简体中文区）/ `tchinese`（繁体中文区）/ `japanese`（日语区）/ `english`（英语区）/ `all`（全部语言）
+- `/steam` 指令本身只接收 AppID；商店链接由自动解析处理器负责
+- `/steam_price` 与 `/steam_shots` 同时支持 AppID 和商店链接
+- `/steam_rlang` 无参数时显示帮助，无参数发送查询后自动消费（一次性）
+- `/steam_adult` 无参数时默认为 `status` 且作用于当前会话；可附加 UMO 参数远程管理任意会话，变更写回 WebUI 配置
+- 获取会话 UMO：向机器人发送 `/sid`，即可查看当前会话的唯一标识符
 
 **商店链接支持格式示例**：
 ```
