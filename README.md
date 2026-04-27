@@ -204,16 +204,6 @@ https://store.steampowered.com/app/2989760/_/
 
 ---
 
-## 重要经验与已知边界
-
-- 查询主链路为：`main.py -> StoreService -> SteamClient / ITADClient -> formatter`。其中 `main.py` 负责 AstrBot 指令和平台差异，`formatter.py` 只负责文本排版。
-- 地区不可见时，`/steam`、自动解析和 `/steam_shots` 会按 `cc_fallback_order` 自动回退；`/steam_price` 当前不做地区回退。
-- 在 aiocqhttp / NapCat 环境下，`/steam_shots` 走 OneBot 本地 `file:///` 直发长图。成功后必须显式终止事件链路，否则 AstrBot 可能把原始命令继续交给后续 LLM 流程。
-- 极少数截图会被 QQ NT 服务端风控挂起。当前策略是：单次发送 3 秒超时、最多重试 3 次、每次重拼图加入轻微白边抖动；若仍失败，则统一返回失败提示语，不再输出截图链接。
-- `/steam_shots` 采用轻量查询路径（`enrich=False`），只请求 `appdetails` 和截图资源，不额外拉取评测、在线人数和 ITAD 数据。
-
----
-
 ## 数据来源
 
 - 游戏详情：[Steam Store API `appdetails`](https://store.steampowered.com/api/appdetails)（公开接口）
@@ -223,11 +213,9 @@ https://store.steampowered.com/app/2989760/_/
 
 ## 未来计划
 - 增加可自选输出美化图片+文本排版的纯图片输出的功能，增加美观度和便捷性
-- 实现简单的网页截图功能，作为部分信息无法满足的补充
-- 增加对游戏商店页面相关捆绑包和DLC的显示
-- 增加SteamDB等第三方数据库的查询选项，作为信息补充，获取历史低价等公开接口无法提供的数据。
-- 群愿望单
-- 日志中若无法获取到页面信息启动地区遍历功能时，不应只返回一个“AppID xxx cc=cn 查询失败: AppID xxx 不存在或在当前地区不可见”，只要启用遍历功能并成功获取到信息时，都应该在日志中添加明确反馈。若均失败也应有对应的日志信息。
+- 增加对游戏商店页面相关捆绑包和DLC的显
+
+---
 
 ## 许可
 
