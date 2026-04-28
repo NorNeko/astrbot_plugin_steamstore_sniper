@@ -19,11 +19,11 @@ from .core.security_acl import SecurityACL
 from .core.image_utils import stitch_images_vertical
 from .core.wishlist_manager import WishlistManager
 from .core.llm_client import LLMClient
+from .models.wishlist_models import WishlistGameCache
 from .core import formatter
 
 if TYPE_CHECKING:
     from .models.store_models import SteamGameInfo
-    from .models.wishlist_models import WishlistGameCache
 
 # 从 Steam 商店链接中提取 AppID（定版规则：开发圣经 §5.2）
 _URL_APPID_RE = re.compile(r"store\.steampowered\.com/app/(\d+)")
