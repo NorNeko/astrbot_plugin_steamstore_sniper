@@ -713,16 +713,13 @@ class SteamStoreSniperPlugin(Star):
         except (TypeError, ValueError):
             return 5
 
+    def _search_game_only(self) -> bool:
+        """检查搜索结果是否仅显示游戏（过滤 DLC、原声带、视频等非游戏内容）。"""
+        return bool(self.config.get("search_game_only", True))
+
     # ------------------------------------------------------------------
     # 搜索结果选择缓存（#N 选择功能）
     # ------------------------------------------------------------------
-
-    def _store_search_cache(self, sender_id: str, items: list[dict]) -> None:
-        """为指定用户缓存搜索结果列表，2 分钟后自动过期。"""
-        self._search_select_cache[sender_id] = {
-            "items": items,
-            "expires": time.monotonic() + self._SEARCH_CACHE_TTL,
-        }
 
     def _get_search_cache(self, sender_id: str) -> list[dict] | None:
         """获取用户的搜索结果缓存，过期则返回 None 并清理。"""
@@ -786,45 +783,82 @@ class SteamStoreSniperPlugin(Star):
         keyword: str,
     ):
         """
-        逐条发送搜索结果：封面缩略图 + 文字描述。
-        每条结果作为一个独立消息发送（图片+文字），实现"文字夹带封面缩略图"效果。
-        图片发送失败时跳过该条图片，仅发送文字。
-        多条结果时缓存到用户选择缓存（2 分钟），并提示 #N 选择。
+        发送搜索结果（支持分页）。
+        将全部结果存入缓存，仅发送第一页内容。
+        多条结果时缓存供 #N 选择和 #next/#prev 翻页（2 分钟）。
         """
-        # 多条结果时缓存到用户选择缓存
         sender_id = event.get_sender_id()
-        if sender_id and len(results) > 1:
-            self._store_search_cache(sender_id, results)
+        page_size = self._search_max_results()
+        total = len(results)
 
-        # 先发送标题行
-        yield event.plain_result(
-            f"🔍 搜索「{keyword}」找到 {len(results)} 个相关结果："
-        )
+        # 将全部结果存入缓存（含分页元数据）
+        if sender_id and total > 1:
+            self._search_select_cache[sender_id] = {
+                "items": results,
+                "page": 0,
+                "page_size": page_size,
+                "keyword": keyword,
+                "expires": time.monotonic() + self._SEARCH_CACHE_TTL,
+            }
 
-        # 逐条发送结果
-        for i, item in enumerate(results):
+        # 发送第一页
+        async for r in self._send_search_page(event, results, keyword, 0, page_size, total):
+            yield r
+
+    async def _send_search_page(
+        self,
+        event: AstrMessageEvent,
+        all_items: list[dict],
+        keyword: str,
+        page: int,
+        page_size: int,
+        total: int,
+    ):
+        """发送搜索结果的指定页。"""
+        start = page * page_size
+        end = min(start + page_size, total)
+        page_items = all_items[start:end]
+        total_pages = max(1, (total + page_size - 1) // page_size)
+
+        # 标题行
+        if total_pages > 1:
+            yield event.plain_result(
+                f"🔍 搜索「{keyword}」共找到 {total} 个结果（显示 {start + 1}-{end}）："
+            )
+        else:
+            yield event.plain_result(
+                f"🔍 搜索「{keyword}」找到 {total} 个相关结果："
+            )
+
+        # 逐条发送结果（使用绝对编号）
+        for i, item in enumerate(page_items, start=start + 1):
             name = item.get("name", "未知游戏")
             appid = item.get("appid", "")
             price = item.get("price", "")
             image_url = item.get("image_url", "")
 
-            # 构建文字描述
-            text = f"  {i + 1}. {name}（AppID {appid}）"
+            text = f"  {i}. {name}（AppID {appid}）"
             if price:
                 text += f"\n     💰 {price}"
 
-            # 尝试附带封面缩略图发送
             if image_url:
                 result = event.make_result().url_image(image_url).message(text)
                 yield result
             else:
                 yield event.plain_result(text)
 
-        # 多条结果时提示 #N 选择
-        if len(results) > 1:
-            yield event.plain_result(
-                f"💡 输入 #1 ~ #{len(results)} 选择指定游戏查看详情（2 分钟内有效）"
-            )
+        # 提示行
+        hints: list[str] = []
+        if total > 1:
+            hints.append(f"输入 #1 ~ #{total} 选择指定游戏查看详情")
+        if total_pages > 1:
+            if page > 0:
+                hints.append("#prev 上一页")
+            if page < total_pages - 1:
+                hints.append("#next 下一页")
+
+        if hints:
+            yield event.plain_result("💡 " + "，".join(hints) + "（2 分钟内有效）")
 
     # ------------------------------------------------------------------
     # 指令：/steam_search（游戏搜索）
@@ -857,6 +891,10 @@ class SteamStoreSniperPlugin(Star):
             results = await self._client.search_suggest(keyword, self._cc(), self._lang())
         except SteamAPIError as e:
             logger.warning(f"[steam] 搜索 suggest 失败: {e}")
+
+        # 过滤非游戏内容（DLC、原声带、视频等），仅保留游戏
+        if self._search_game_only():
+            results = [r for r in results if r.get("type") == "game"]
 
         # 限制结果数量（不再回退 /search/results/，因其会返回无关推荐游戏）
         results = results[:max_results]
@@ -1014,6 +1052,58 @@ class SteamStoreSniperPlugin(Star):
 
         # 匹配度低 → 返回未找到
         yield event.plain_result(f"🔍 搜索「{keyword}」暂未搜索到相关内容")
+
+    # ------------------------------------------------------------------
+    # 正则指令：#next/#prev 搜索结果翻页（2 分钟缓存）
+    # ------------------------------------------------------------------
+
+    @filter.regex(r"^#(next|n|prev|p)$")
+    async def cmd_search_page(self, event: AstrMessageEvent):
+        """搜索结果翻页。用法：#next（下一页）/ #prev（上一页）"""
+        sender_id = event.get_sender_id()
+        if not sender_id:
+            return
+
+        self._cleanup_expired_search_cache()
+
+        entry = self._search_select_cache.get(sender_id)
+        if not entry:
+            return
+
+        if time.monotonic() > entry["expires"]:
+            del self._search_select_cache[sender_id]
+            return
+
+        m = re.match(r"^#(next|n|prev|p)$", event.message_str.strip(), re.IGNORECASE)
+        if not m:
+            return
+
+        action = m.group(1).lower()
+        items = entry["items"]
+        page = entry["page"]
+        page_size = entry["page_size"]
+        keyword = entry["keyword"]
+        total = len(items)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+
+        if action in ("next", "n"):
+            new_page = page + 1
+        else:
+            new_page = page - 1
+
+        if new_page < 0:
+            yield event.plain_result("📄 已经是第一页了。")
+            return
+        if new_page >= total_pages:
+            yield event.plain_result("📄 已经是最后一页了。")
+            return
+
+        # 更新页码并刷新过期时间
+        entry["page"] = new_page
+        entry["expires"] = time.monotonic() + self._SEARCH_CACHE_TTL
+
+        async for r in self._send_search_page(event, items, keyword, new_page, page_size, total):
+            yield r
 
     # ------------------------------------------------------------------
     # 正则指令：#N 选择搜索结果中的指定游戏（2 分钟缓存）

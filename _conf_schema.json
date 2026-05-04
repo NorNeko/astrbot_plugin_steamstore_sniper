@@ -159,9 +159,15 @@
         },
         "default": 200
     },
+    "search_game_only": {
+        "description": "仅显示游戏（过滤非游戏内容）",
+        "hint": "开启后，搜索结果将过滤 DLC、原声带、视频、画册等非游戏内容，仅显示完整游戏。推荐开启以避免大量同名 DLC 占据搜索结果。",
+        "type": "bool",
+        "default": true
+    },
     "search_max_results": {
-        "description": "搜索结果最大显示数量",
-        "hint": "/steam_search 每次最多显示的搜索结果条数，范围 1-10",
+        "description": "搜索结果每页显示数量",
+        "hint": "/steam_search 每页最多显示的搜索结果条数，范围 1-10。超出此数量的结果可通过 #next/#prev 翻页查看。",
         "type": "int",
         "slider": {
             "min": 1,

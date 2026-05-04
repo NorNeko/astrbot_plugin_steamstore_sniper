@@ -211,23 +211,50 @@ class SteamClient:
         except aiohttp.ClientError as e:
             raise SteamAPIError(f"搜索网络错误：{e}")
 
-        # 解析 HTML 片段：每个 <a class="match ..."> 块包含 data-ds-appid / match_name / match_price
+        # 解析 HTML 片段：每个 <a> 块包含 data-ds-appid / class / match_name / match_price
+        # 注意：HTML 属性顺序不固定，需要同时支持 class 在 appid 前后两种情况
         appids = _RE_APPID.findall(html)
         names = _RE_MATCH_NAME.findall(html)
         prices = _RE_MATCH_PRICE.findall(html)
+
+        # 提取每个 <a> 标签的完整 class 属性（用于判断 game/dlc/other）
+        # 匹配包含 data-ds-appid 的标签中的 class
+        _RE_TAG_WITH_APPID = re.compile(
+            r'<a\s[^>]*?data-ds-appid="(\d+)"[^>]*?>'
+        )
+        _RE_CLASS_IN_TAG = re.compile(r'class="([^"]*)"')
+
+        # 构建 appid → class 映射
+        appid_class_map: dict[str, str] = {}
+        for tag_match in _RE_TAG_WITH_APPID.finditer(html):
+            tag_str = tag_match.group(0)
+            tag_appid = tag_match.group(1)
+            class_match = _RE_CLASS_IN_TAG.search(tag_str)
+            if class_match:
+                appid_class_map[tag_appid] = class_match.group(1)
 
         results: list[dict] = []
         for i, appid_str in enumerate(appids):
             name = names[i] if i < len(names) else "未知游戏"
             price = prices[i] if i < len(prices) else ""
+
+            # 判断类型：仅当 class 包含 'ds_game' 时视为游戏
+            class_str = appid_class_map.get(appid_str, "")
+            is_game = "ds_game" in class_str
+
             results.append({
                 "appid": int(appid_str),
                 "name": _unescape_html(name),
                 "price": _unescape_html(price),
                 "image_url": f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{appid_str}/capsule_231x87.jpg",
+                "type": "game" if is_game else "other"
             })
 
-        logger.debug(f"[steam_client] 搜索 suggest 返回 {len(results)} 条结果")
+        logger.debug(
+            f"[steam_client] 搜索 suggest 返回 {len(results)} 条结果 "
+            f"(game={sum(1 for r in results if r['type'] == 'game')}, "
+            f"other={sum(1 for r in results if r['type'] != 'game')})"
+        )
         return results
 
     async def search_results_fallback(self, keyword: str, cc: str, lang: str, count: int = 5) -> list[dict]:
