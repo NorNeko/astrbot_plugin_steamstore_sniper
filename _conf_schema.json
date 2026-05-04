@@ -62,7 +62,7 @@
     },
     "llm_api_url": {
         "description": "LLM API 地址",
-        "hint": "OpenAI 兼容的 Chat Completions API 地址。示例：https://api.openai.com/v1/chat/completions 或其他兼容接口。留空则禁用 LLM 功能（增强搜索降级为纯 ITAD 搜索）。",
+        "hint": "OpenAI 兼容的 Chat Completions API 地址。支持填写基础 URL（自动补全端点路径），例如：https://api.openai.com/v1 或 https://generativelanguage.googleapis.com/（Gemini）。也可填写完整地址如 https://api.deepseek.com/v1/chat/completions。留空则禁用 LLM 功能（增强搜索降级为纯 ITAD 搜索）。",
         "type": "string",
         "default": ""
     },

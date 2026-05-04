@@ -23,6 +23,11 @@ class LLMClient:
     用于插件内部的文本处理任务（如搜索结果校验、游戏名翻译）。
     """
 
+    # Gemini OpenAI 兼容端点路径
+    _GEMINI_CHAT_PATH = "/v1beta/openai/chat/completions"
+    # 通用 OpenAI 兼容端点路径
+    _OPENAI_CHAT_PATH = "/v1/chat/completions"
+
     def __init__(
         self,
         api_url: str,
@@ -31,12 +36,43 @@ class LLMClient:
         timeout: int = 15,
         proxy: str | None = None,
     ):
-        self._api_url = api_url.rstrip("/")
+        self._api_url = self._normalize_api_url(api_url)
         self._api_key = api_key
         self._model = model
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._proxy = proxy
         self._session: aiohttp.ClientSession | None = None
+
+    @staticmethod
+    def _normalize_api_url(url: str) -> str:
+        """
+        智能规范化 LLM API URL，自动补全 Chat Completions 端点路径。
+
+        支持的输入格式：
+        - 完整端点（已含 /chat/completions）：原样返回
+        - Gemini 基础 URL（generativelanguage.googleapis.com）：补全为 OpenAI 兼容路径
+        - OpenAI 基础 URL（api.openai.com）：补全 /v1/chat/completions
+        - 其他第三方兼容 API 基础 URL：补全 /v1/chat/completions
+        """
+        url = url.rstrip("/")
+
+        # 已经是完整的 chat completions 端点，直接返回
+        if url.endswith("/chat/completions"):
+            return url
+
+        # Gemini 特殊处理：使用 Google 的 OpenAI 兼容端点
+        if "generativelanguage.googleapis.com" in url:
+            # 去掉可能存在的 /v1、/v1beta 等版本前缀，统一使用 v1beta/openai
+            base = url.split("/v1")[0] if "/v1" in url else url
+            return base.rstrip("/") + LLMClient._GEMINI_CHAT_PATH
+
+        # 通用 OpenAI 兼容 API（OpenAI、DeepSeek、硅基流动、月之暗面等）
+        # 如果 URL 不含 /v1 路径，补全 /v1/chat/completions
+        if "/v1" not in url:
+            return url + LLMClient._OPENAI_CHAT_PATH
+
+        # URL 含 /v1 但未到 chat/completions（如 https://api.openai.com/v1）
+        return url + "/chat/completions"
 
     async def create_session(self) -> None:
         """创建 aiohttp 会话。"""

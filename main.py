@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json as _json
 from pathlib import Path
+import random
 import re
 import tempfile
 import time
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star
+from astrbot.api.star import Context, Star, StarTools
 
 from .core.steam_client import SteamClient, SteamAPIError
 from .core.store_service import StoreService
@@ -19,7 +20,7 @@ from .core.security_acl import SecurityACL
 from .core.image_utils import stitch_images_vertical
 from .core.wishlist_manager import WishlistManager
 from .core.llm_client import LLMClient
-from .models.wishlist_models import WishlistGameCache
+from .models.wishlist_models import WishlistGameCache, WishAdder, PendingNotification
 from .core import formatter
 
 if TYPE_CHECKING:
@@ -118,8 +119,9 @@ class SteamStoreSniperPlugin(Star):
         self._SEARCH_CACHE_TTL = 120.0  # 2 分钟过期
 
         # ── 群愿望单 ──
-        self._wishlist = WishlistManager(data_dir=Path(__file__).parent)
+        self._wishlist = WishlistManager(data_dir=StarTools.get_data_dir())
         self._wishlist_refresh_lock = asyncio.Lock()
+        self._background_tasks: set[asyncio.Task] = set()
 
     async def initialize(self):
         await self._client.create_session()
@@ -1157,8 +1159,7 @@ class SteamStoreSniperPlugin(Star):
                         # 判断是否处于史低
                         if entry.history_low_price is not None and entry.current_price:
                             # 从格式化价格中提取数字进行比较
-                            import re as _re
-                            price_match = _re.search(r"[\d,.]+", entry.current_price)
+                            price_match = re.search(r"[\d,.]+", entry.current_price)
                             if price_match:
                                 try:
                                     current_num = float(price_match.group().replace(",", ""))
@@ -1196,8 +1197,6 @@ class SteamStoreSniperPlugin(Star):
         umo = event.unified_msg_origin
         sender_id = event.get_sender_id() or ""
         sender_name = event.get_sender_name() or sender_id
-
-        from .models.wishlist_models import WishAdder
 
         adder = WishAdder(
             sender_id=sender_id,
@@ -1314,7 +1313,9 @@ class SteamStoreSniperPlugin(Star):
         yield event.plain_result("\n".join(lines))
 
         # 惰性触发刷新检查（后台执行，不阻塞响应）
-        asyncio.create_task(self._wishlist_lazy_refresh())
+        task = asyncio.create_task(self._wishlist_lazy_refresh())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def _wishlist_lazy_refresh(self):
         """惰性触发愿望单刷新（在 /wish 指令时后台执行）。"""
@@ -1396,8 +1397,6 @@ class SteamStoreSniperPlugin(Star):
 
     async def _refresh_tier(self, games: list, tier_name: str) -> bool:
         """刷新指定层级的游戏信息。返回是否有数据变化。"""
-        import random
-
         changed = False
         batch_size = 20
 
@@ -1455,8 +1454,7 @@ class SteamStoreSniperPlugin(Star):
                         entry.history_low_date = (low.get("timestamp") or "")[:10] or None
                         # 判断是否处于史低
                         if entry.history_low_price is not None and entry.current_price:
-                            import re as _re
-                            price_match = _re.search(r"[\d,.]+", entry.current_price)
+                            price_match = re.search(r"[\d,.]+", entry.current_price)
                             if price_match:
                                 try:
                                     current_num = float(price_match.group().replace(",", ""))
@@ -1501,8 +1499,6 @@ class SteamStoreSniperPlugin(Star):
 
     def _detect_changes(self) -> list:
         """检测游戏状态变化，生成待发通知列表。"""
-        from .models.wishlist_models import PendingNotification
-
         notifications = []
         for entry in self._wishlist.get_all_games():
             just_released = entry.is_released and not entry.was_released
@@ -1537,8 +1533,6 @@ class SteamStoreSniperPlugin(Star):
         adders: list,
     ):
         """向指定群发送愿望单通知。"""
-        from .models.wishlist_models import PendingNotification
-
         # 构建 @提及文本
         at_parts: list[str] = []
         for adder in adders:
