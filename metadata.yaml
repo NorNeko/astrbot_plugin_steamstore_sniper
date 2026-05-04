@@ -1,6 +1,6 @@
 name: astrbot_plugin_steam_radar
 display_name: Steam 雷达
-desc: Steam 全能助手：游戏详情查询、多地区价格、截图、搜索、群愿望单、发售/史低自动通知。
+desc: 面向群聊的 Steam 全能助手：游戏详情查询、多地区价格、截图、搜索、群愿望单、发售/史低自动通知。
 help: |
   【基础查询】
   /steam {appid}                查询游戏详情（通过 AppID）
