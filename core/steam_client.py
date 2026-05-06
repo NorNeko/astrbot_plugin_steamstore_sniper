@@ -68,11 +68,11 @@ class SteamClient:
             self._query_times.append(now)
 
     async def create_session(self) -> None:
-            self._session = aiohttp.ClientSession(
-                timeout=self._timeout,
-                trust_env=True,  # 允许读取 HTTPS_PROXY 等环境变量，作为显式代理未配置时的回退
-            )
-            logger.debug(f"[steam_client] aiohttp session 已创建，代理={'[trust_env]' if self._proxy is None else self._proxy}")
+        self._session = aiohttp.ClientSession(
+            timeout=self._timeout,
+            trust_env=True,  # 允许读取 HTTPS_PROXY 等环境变量，作为显式代理未配置时的回退
+        )
+        logger.debug(f"[steam_client] aiohttp session 已创建，代理={'[trust_env]' if self._proxy is None else self._proxy}")
 
     async def close_session(self) -> None:
         if self._session and not self._session.closed:

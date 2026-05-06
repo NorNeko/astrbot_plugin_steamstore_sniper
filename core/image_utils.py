@@ -222,19 +222,35 @@ _HEADER_TEXT_COLOR = (102, 196, 255)
 
 def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """尝试加载系统字体，失败时回退到 PIL 默认字体。"""
-    # Windows 常见中文字体路径
     _FONT_CANDIDATES = [
+        # Windows
         "C:/Windows/Fonts/msyh.ttc",       # 微软雅黑
         "C:/Windows/Fonts/msyhbd.ttc",      # 微软雅黑粗体
         "C:/Windows/Fonts/simhei.ttf",      # 黑体
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",  # Linux
-        "/System/Library/Fonts/PingFang.ttc",  # macOS
+        "C:/Windows/Fonts/simsun.ttc",      # 宋体
+        # macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        # Linux（常见发行版）
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
+        # Alpine Linux（Docker 常用）
+        "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",
     ]
     for path in _FONT_CANDIDATES:
         try:
             return ImageFont.truetype(path, size)
         except (OSError, IOError):
             continue
+    logger.warning(
+        "[image_utils] 未找到中文字体，回退到 PIL 默认字体（中文可能显示为方块）。"
+        "建议在系统中安装中文字体（如 Noto Sans CJK、文泉驿微米黑等）。"
+    )
     return ImageFont.load_default()
 
 

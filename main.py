@@ -136,6 +136,13 @@ class SteamStoreSniperPlugin(Star):
         logger.info("[steam] 插件已初始化")
 
     async def terminate(self):
+        # 取消所有后台任务，防止插件重载/卸载时资源泄漏
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
+
         await self._client.close_session()
         if self._itad_client:
             await self._itad_client.close_session()
